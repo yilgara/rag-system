@@ -485,7 +485,7 @@ class RAGSystem:
                 processed_chunks = []
                 chunk_id = 0
 
-                st.write("hello")
+                st.write("hello222")
                 
                 for raw_chunk in raw_chunks:
                     # Further chunk the text if it's too long
