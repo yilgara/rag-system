@@ -134,7 +134,7 @@ class TextChunker:
             sentences = sent_tokenize(text)
         except LookupError:
             # Fallback to simple sentence splitting
-            sentences = re.split(r'[.!?]+', context)
+            sentences = re.split(r'[.!?]+', text)
             sentences = [s.strip() for s in sentences if s.strip()]
             
         
