@@ -129,7 +129,15 @@ class TextChunker:
     @staticmethod
     def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]:
         """Split text into overlapping chunks"""
-        sentences = sent_tokenize(text)
+
+        try:
+            sentences = sent_tokenize(text)
+        except LookupError:
+            # Fallback to simple sentence splitting
+            sentences = re.split(r'[.!?]+', context)
+            sentences = [s.strip() for s in sentences if s.strip()]
+            
+        
         chunks = []
         current_chunk = []
         current_length = 0
