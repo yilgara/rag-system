@@ -17,8 +17,8 @@ from io import StringIO
 # Vector database and embeddings
 import chromadb
 from chromadb.config import Settings
-import openai
 from sentence_transformers import SentenceTransformer
+# import openai  # Uncomment if you want to use OpenAI GPT models
 
 # Text processing
 import nltk
@@ -323,10 +323,9 @@ class RAGSystem:
             query_embedding = self.embedding_model.encode([query])
             
             # Search vector database
-            results = self.collection.query(
+            results = self.vector_db.query(
                 query_embeddings=query_embedding.tolist(),
-                n_results=top_k,
-                include=["documents", "metadatas", "distances"]
+                n_results=top_k
             )
             
             if not results['documents'][0]:
