@@ -14,8 +14,8 @@ pandas>=1.5.0
 # Option 1: FAISS (Facebook AI Similarity Search) - Works on all systems
 faiss-cpu>=1.7.4
 
-# Option 2: ChromaDB (uncomment if your system supports SQLite 3.35+)
-# chromadb>=0.4.15
+# Option 2: ChromaDB - Included but will fallback to FAISS if SQLite issues occur
+chromadb>=0.4.15
 
 # Embeddings and ML
 sentence-transformers>=2.2.2
