@@ -484,6 +484,8 @@ class RAGSystem:
                 # Process chunks
                 processed_chunks = []
                 chunk_id = 0
+
+                st.write("hello")
                 
                 for raw_chunk in raw_chunks:
                     # Further chunk the text if it's too long
@@ -504,7 +506,7 @@ class RAGSystem:
                                 'id': f"{file_hash}_{chunk_id}"
                             })
                             chunk_id += 1
-                
+                st.write("hello2")
                 if not processed_chunks:
                     st.error("No text content found in the file")
                     return False
