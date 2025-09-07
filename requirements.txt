@@ -2,7 +2,38 @@
 # Python version: 3.8-3.11 (recommended: 3.9-3.10)
 
 # Core Framework
-streamlit>=1.# Python RAG System Requirements
+streamlit>=1.28.0
+
+# Document Processing
+PyPDF2>=3.0.1
+python-docx>=0.8.11
+pandas>=1.5.0
+
+# Vector Database - FAISS (guaranteed to work)
+faiss-cpu>=1.7.4
+
+# Machine Learning and Embeddings
+sentence-transformers>=2.2.2
+numpy>=1.21.0
+
+# Natural Language Processing
+nltk>=3.8.1
+
+# System utilities
+pathlib2>=2.3.7; python_version < "3.4"
+typing-extensions>=4.0.0
+
+# Optional: ChromaDB (uncomment if you want to try it and have SQLite 3.35+)
+# chromadb>=0.4.15
+
+# Optional: OpenAI API (for better answer generation)
+# openai>=1.0.0
+
+# Note: The following are automatically installed with sentence-transformers:
+# - torch>=1.9.0
+# - transformers>=4.21.0
+# - scikit-learn>=1.0.0
+# - scipy>=1.7.0# Python RAG System Requirements
 # Minimum Python version: 3.8+
 # Recommended Python version: 3.9-3.11
 
