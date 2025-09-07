@@ -1,4 +1,8 @@
-# Python RAG System Requirements
+# RAG System Requirements
+# Python version: 3.8-3.11 (recommended: 3.9-3.10)
+
+# Core Framework
+streamlit>=1.# Python RAG System Requirements
 # Minimum Python version: 3.8+
 # Recommended Python version: 3.9-3.11
 
@@ -14,8 +18,9 @@ pandas>=1.5.0
 # Option 1: FAISS (Facebook AI Similarity Search) - Works on all systems
 faiss-cpu>=1.7.4
 
-# Option 2: ChromaDB - Included but will fallback to FAISS if SQLite issues occur
-chromadb>=0.4.15
+# Option 2: ChromaDB - OPTIONAL (uncomment if your system supports SQLite 3.35+)
+# If you want to try ChromaDB, uncomment the line below:
+# chromadb>=0.4.15
 
 # Embeddings and ML
 sentence-transformers>=2.2.2
