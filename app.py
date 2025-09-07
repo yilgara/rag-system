@@ -490,8 +490,10 @@ class RAGSystem:
                 for raw_chunk in raw_chunks:
                     # Further chunk the text if it's too long
                     text_chunks = self.text_chunker.chunk_text(raw_chunk['text'])
+                    st.write("chunk")
                     
                     for text_chunk in text_chunks:
+                        st.write("inner chunk")
                         if text_chunk.strip():
                             chunk_metadata = {
                                 'filename': uploaded_file.name,
@@ -499,6 +501,7 @@ class RAGSystem:
                                 'chunk_id': chunk_id,
                                 'source_info': raw_chunk
                             }
+                            st.write("inner chunk if")
                             
                             processed_chunks.append({
                                 'text': text_chunk,
@@ -506,6 +509,8 @@ class RAGSystem:
                                 'id': f"{file_hash}_{chunk_id}"
                             })
                             chunk_id += 1
+                            st.write("inner chunk proced")
+                            st.write(chunk_id)
                 st.write("hello2")
                 if not processed_chunks:
                     st.error("No text content found in the file")
