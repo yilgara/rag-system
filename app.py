@@ -650,7 +650,12 @@ class RAGSystem:
         
         # Simple keyword matching and context extraction
         query_words = set(query.lower().split())
-        context_sentences = sent_tokenize(context)
+        try:
+            context_sentences = sent_tokenize(context)
+        except LookupError:
+            # Fallback to simple sentence splitting
+            context_sentences = re.split(r'[.!?]+', context)
+            context_sentences = [s.strip() for s in context_sentences if s.strip()]
         
         relevant_sentences = []
         for sentence in context_sentences:
@@ -836,3 +841,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+        
+
