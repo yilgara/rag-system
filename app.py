@@ -451,9 +451,13 @@ class RAGSystem:
     def process_file(self, uploaded_file) -> bool:
         """Process and index a single file"""
         try:
+            st.write(f"📄 Starting to process: {uploaded_file.name}")
+            
             # Read file content
             file_content = uploaded_file.read()
             file_hash = self.get_file_hash(file_content)
+            
+            st.write(f"🔍 File hash: {file_hash[:8]}...")
             
             # Check if file already exists
             if file_hash in self.metadata:
@@ -465,9 +469,12 @@ class RAGSystem:
                 tmp_file.write(file_content)
                 tmp_path = tmp_file.name
             
+            st.write(f"💾 Saved temporary file: {tmp_path}")
+            
             try:
                 # Extract text based on file type
                 file_ext = Path(uploaded_file.name).suffix.lower()
+                st.write(f"🔧 Processing file type: {file_ext}")
                 
                 if file_ext == '.pdf':
                     raw_chunks = self.doc_processor.extract_text_from_pdf(tmp_path)
@@ -481,19 +488,24 @@ class RAGSystem:
                     st.error(f"Unsupported file type: {file_ext}")
                     return False
                 
+                st.write(f"📝 Extracted {len(raw_chunks)} raw chunks")
+                
+                if not raw_chunks:
+                    st.error("No content extracted from file")
+                    return False
+                
                 # Process chunks
                 processed_chunks = []
                 chunk_id = 0
-
-                st.write("hello222")
                 
-                for raw_chunk in raw_chunks:
+                for i, raw_chunk in enumerate(raw_chunks):
+                    st.write(f"🔨 Processing chunk {i+1}/{len(raw_chunks)}")
+                    
                     # Further chunk the text if it's too long
                     text_chunks = self.text_chunker.chunk_text(raw_chunk['text'])
-                    st.write("chunk")
+                    st.write(f"  ➡️ Split into {len(text_chunks)} sub-chunks")
                     
                     for text_chunk in text_chunks:
-                        st.write("inner chunk")
                         if text_chunk.strip():
                             chunk_metadata = {
                                 'filename': uploaded_file.name,
@@ -501,7 +513,6 @@ class RAGSystem:
                                 'chunk_id': chunk_id,
                                 'source_info': raw_chunk
                             }
-                            st.write("inner chunk if")
                             
                             processed_chunks.append({
                                 'text': text_chunk,
@@ -509,18 +520,21 @@ class RAGSystem:
                                 'id': f"{file_hash}_{chunk_id}"
                             })
                             chunk_id += 1
-                            st.write("inner chunk proced")
-                            st.write(chunk_id)
-                st.write("hello2")
+                
                 if not processed_chunks:
                     st.error("No text content found in the file")
                     return False
                 
+                st.write(f"✅ Created {len(processed_chunks)} final chunks")
+                
                 # Generate embeddings
+                st.write("🧠 Generating embeddings...")
                 texts = [chunk['text'] for chunk in processed_chunks]
                 embeddings = self.embedding_model.encode(texts)
+                st.write(f"✅ Generated embeddings: {embeddings.shape}")
                 
                 # Store in vector database
+                st.write("💾 Storing in vector database...")
                 ids = [chunk['id'] for chunk in processed_chunks]
                 metadatas = [chunk['metadata'] for chunk in processed_chunks]
                 
@@ -530,6 +544,7 @@ class RAGSystem:
                     metadatas=metadatas,
                     ids=ids
                 )
+                st.write("✅ Stored in vector database")
                 
                 # Update metadata
                 self.metadata[file_hash] = {
@@ -538,16 +553,20 @@ class RAGSystem:
                     'file_size': len(file_content)
                 }
                 self.save_metadata()
+                st.write("✅ Updated metadata")
                 
-                st.success(f"Successfully processed {uploaded_file.name} ({len(processed_chunks)} chunks)")
+                st.success(f"🎉 Successfully processed {uploaded_file.name} ({len(processed_chunks)} chunks)")
                 return True
                 
             finally:
                 # Clean up temporary file
-                os.unlink(tmp_path)
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+                    st.write("🗑️ Cleaned up temporary file")
                 
         except Exception as e:
-            st.error(f"Error processing file {uploaded_file.name}: {str(e)}")
+            st.error(f"❌ Error processing file {uploaded_file.name}: {str(e)}")
+            st.exception(e)  # This will show the full traceback
             return False
     
     def delete_file(self, file_hash: str) -> bool:
