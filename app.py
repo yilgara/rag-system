@@ -15,10 +15,10 @@ import csv
 from io import StringIO
 
 # Vector database and embeddings
-import chromadb
-from chromadb.config import Settings
+import faiss
+import pickle
+import numpy as np
 from sentence_transformers import SentenceTransformer
-# import openai  # Uncomment if you want to use OpenAI GPT models
 
 # Text processing
 import nltk
@@ -30,6 +30,20 @@ try:
     nltk.data.find('tokenizers/punkt')
 except LookupError:
     nltk.download('punkt')
+
+# Safely try to import ChromaDB
+def try_import_chromadb():
+    """Safely import ChromaDB, return None if not available"""
+    try:
+        import chromadb
+        from chromadb.config import Settings
+        return chromadb, Settings
+    except (ImportError, RuntimeError, Exception) as e:
+        return None, None
+
+# Check ChromaDB availability
+chromadb, Settings = try_import_chromadb()
+CHROMADB_AVAILABLE = chromadb is not None
 
 class DocumentProcessor:
     """Handles document parsing and text extraction"""
@@ -148,6 +162,242 @@ class TextChunker:
         
         return chunks
 
+class VectorDatabase:
+    """Abstract vector database interface"""
+    
+    def __init__(self, db_path: str, embedding_dim: int = 384):
+        self.db_path = db_path
+        self.embedding_dim = embedding_dim
+        self.metadata_file = os.path.join(db_path, "vector_metadata.json")
+        os.makedirs(db_path, exist_ok=True)
+        
+    def add(self, embeddings: List[List[float]], documents: List[str], 
+            metadatas: List[Dict], ids: List[str]):
+        raise NotImplementedError
+    
+    def query(self, query_embeddings: List[List[float]], n_results: int = 5):
+        raise NotImplementedError
+    
+    def delete(self, ids: List[str]):
+        raise NotImplementedError
+    
+    def get(self, where: Dict = None, include: List[str] = None):
+        raise NotImplementedError
+
+class FAISSDatabase(VectorDatabase):
+    """FAISS-based vector database implementation"""
+    
+    def __init__(self, db_path: str, embedding_dim: int = 384):
+        super().__init__(db_path, embedding_dim)
+        self.index_file = os.path.join(db_path, "faiss_index.bin")
+        self.documents_file = os.path.join(db_path, "documents.pkl")
+        self.metadatas_file = os.path.join(db_path, "metadatas.pkl")
+        self.ids_file = os.path.join(db_path, "ids.pkl")
+        
+        # Initialize FAISS index
+        self.index = faiss.IndexFlatIP(embedding_dim)  # Inner product for cosine similarity
+        
+        # Load existing data
+        self.load_data()
+    
+    def load_data(self):
+        """Load existing index and metadata"""
+        try:
+            if os.path.exists(self.index_file):
+                self.index = faiss.read_index(self.index_file)
+            
+            if os.path.exists(self.documents_file):
+                with open(self.documents_file, 'rb') as f:
+                    self.documents = pickle.load(f)
+            else:
+                self.documents = []
+            
+            if os.path.exists(self.metadatas_file):
+                with open(self.metadatas_file, 'rb') as f:
+                    self.metadatas = pickle.load(f)
+            else:
+                self.metadatas = []
+            
+            if os.path.exists(self.ids_file):
+                with open(self.ids_file, 'rb') as f:
+                    self.ids = pickle.load(f)
+            else:
+                self.ids = []
+                
+        except Exception as e:
+            print(f"Error loading FAISS data: {e}")
+            self.documents = []
+            self.metadatas = []
+            self.ids = []
+    
+    def save_data(self):
+        """Save index and metadata"""
+        try:
+            faiss.write_index(self.index, self.index_file)
+            
+            with open(self.documents_file, 'wb') as f:
+                pickle.dump(self.documents, f)
+            
+            with open(self.metadatas_file, 'wb') as f:
+                pickle.dump(self.metadatas, f)
+            
+            with open(self.ids_file, 'wb') as f:
+                pickle.dump(self.ids, f)
+                
+        except Exception as e:
+            print(f"Error saving FAISS data: {e}")
+    
+    def add(self, embeddings: List[List[float]], documents: List[str], 
+            metadatas: List[Dict], ids: List[str]):
+        """Add vectors to the index"""
+        # Normalize embeddings for cosine similarity
+        embeddings_array = np.array(embeddings, dtype=np.float32)
+        faiss.normalize_L2(embeddings_array)
+        
+        # Add to index
+        self.index.add(embeddings_array)
+        
+        # Store metadata
+        self.documents.extend(documents)
+        self.metadatas.extend(metadatas)
+        self.ids.extend(ids)
+        
+        # Save data
+        self.save_data()
+    
+    def query(self, query_embeddings: List[List[float]], n_results: int = 5):
+        """Query the index"""
+        if self.index.ntotal == 0:
+            return {'documents': [[]], 'metadatas': [[]], 'distances': [[]]}
+        
+        # Normalize query embeddings
+        query_array = np.array(query_embeddings, dtype=np.float32)
+        faiss.normalize_L2(query_array)
+        
+        # Search
+        distances, indices = self.index.search(query_array, min(n_results, self.index.ntotal))
+        
+        # Format results
+        documents = []
+        metadatas = []
+        result_distances = []
+        
+        for i, (dist_row, idx_row) in enumerate(zip(distances, indices)):
+            docs = []
+            metas = []
+            dists = []
+            
+            for dist, idx in zip(dist_row, idx_row):
+                if idx != -1:  # Valid index
+                    docs.append(self.documents[idx])
+                    metas.append(self.metadatas[idx])
+                    dists.append(1.0 - dist)  # Convert similarity back to distance
+            
+            documents.append(docs)
+            metadatas.append(metas)
+            result_distances.append(dists)
+        
+        return {
+            'documents': documents,
+            'metadatas': metadatas,
+            'distances': result_distances
+        }
+    
+    def delete(self, ids: List[str]):
+        """Delete vectors by IDs"""
+        # Find indices to remove
+        indices_to_remove = []
+        for id_to_remove in ids:
+            if id_to_remove in self.ids:
+                idx = self.ids.index(id_to_remove)
+                indices_to_remove.append(idx)
+        
+        if not indices_to_remove:
+            return
+        
+        # Remove from metadata lists (in reverse order to maintain indices)
+        for idx in sorted(indices_to_remove, reverse=True):
+            del self.documents[idx]
+            del self.metadatas[idx]
+            del self.ids[idx]
+        
+        # Rebuild FAISS index (FAISS doesn't support efficient deletion)
+        self.index = faiss.IndexFlatIP(self.embedding_dim)
+        self.save_data()
+        return True
+    
+    def get(self, where: Dict = None, include: List[str] = None):
+        """Get vectors by metadata filter"""
+        result_ids = []
+        result_metadatas = []
+        
+        for i, metadata in enumerate(self.metadatas):
+            if where is None:
+                result_ids.append(self.ids[i])
+                result_metadatas.append(metadata)
+            else:
+                # Simple metadata matching
+                match = True
+                for key, value in where.items():
+                    if key not in metadata or metadata[key] != value:
+                        match = False
+                        break
+                
+                if match:
+                    result_ids.append(self.ids[i])
+                    result_metadatas.append(metadata)
+        
+        return {
+            'ids': result_ids,
+            'metadatas': result_metadatas
+        }
+
+class ChromaDatabase(VectorDatabase):
+    """ChromaDB-based vector database implementation"""
+    
+    def __init__(self, db_path: str, embedding_dim: int = 384):
+        super().__init__(db_path, embedding_dim)
+        
+        if not CHROMADB_AVAILABLE:
+            raise RuntimeError("ChromaDB is not available")
+        
+        # Initialize ChromaDB
+        self.client = chromadb.PersistentClient(path=db_path)
+        self.collection = self.client.get_or_create_collection(
+            name="documents",
+            metadata={"hnsw:space": "cosine"}
+        )
+    
+    def add(self, embeddings: List[List[float]], documents: List[str], 
+            metadatas: List[Dict], ids: List[str]):
+        """Add vectors to ChromaDB"""
+        self.collection.add(
+            embeddings=embeddings,
+            documents=documents,
+            metadatas=metadatas,
+            ids=ids
+        )
+    
+    def query(self, query_embeddings: List[List[float]], n_results: int = 5):
+        """Query ChromaDB"""
+        return self.collection.query(
+            query_embeddings=query_embeddings,
+            n_results=n_results,
+            include=["documents", "metadatas", "distances"]
+        )
+    
+    def delete(self, ids: List[str]):
+        """Delete from ChromaDB"""
+        self.collection.delete(ids=ids)
+        return True
+    
+    def get(self, where: Dict = None, include: List[str] = None):
+        """Get from ChromaDB"""
+        return self.collection.get(
+            where=where,
+            include=include or ["metadatas"]
+        )
+
 class RAGSystem:
     """Main RAG system class"""
     
@@ -155,15 +405,24 @@ class RAGSystem:
         self.db_path = "rag_database"
         self.metadata_file = "file_metadata.json"
         
-        # Initialize ChromaDB
-        self.client = chromadb.PersistentClient(path=self.db_path)
-        self.collection = self.client.get_or_create_collection(
-            name="documents",
-            metadata={"hnsw:space": "cosine"}
-        )
+        # Initialize vector database (try ChromaDB first, fallback to FAISS)
+        try:
+            if CHROMADB_AVAILABLE:
+                self.vector_db = ChromaDatabase(self.db_path)
+                st.success("✅ Using ChromaDB for vector storage")
+            else:
+                raise RuntimeError("ChromaDB not available")
+        except Exception as e:
+            self.vector_db = FAISSDatabase(self.db_path)
+            st.warning("⚠️ Using FAISS for vector storage (ChromaDB not available)")
+            if "sqlite3" in str(e).lower():
+                st.info("💡 ChromaDB requires SQLite 3.35+. FAISS works great as an alternative!")
         
         # Initialize embedding model
         self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+        
+        # Store embedding dimension
+        self.embedding_dim = self.embedding_model.get_sentence_embedding_dimension()
         
         # Initialize document processor and chunker
         self.doc_processor = DocumentProcessor()
@@ -258,7 +517,7 @@ class RAGSystem:
                 ids = [chunk['id'] for chunk in processed_chunks]
                 metadatas = [chunk['metadata'] for chunk in processed_chunks]
                 
-                self.collection.add(
+                self.vector_db.add(
                     embeddings=embeddings.tolist(),
                     documents=texts,
                     metadatas=metadatas,
@@ -292,14 +551,14 @@ class RAGSystem:
                 return False
             
             # Get all chunk IDs for this file
-            results = self.collection.get(
+            results = self.vector_db.get(
                 where={"file_hash": file_hash},
                 include=["metadatas"]
             )
             
             if results['ids']:
                 # Delete chunks from vector database
-                self.collection.delete(ids=results['ids'])
+                self.vector_db.delete(ids=results['ids'])
                 
                 # Remove from metadata
                 filename = self.metadata[file_hash]['filename']
