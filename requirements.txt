@@ -20,6 +20,9 @@ torch>=2.0.0
 transformers>=4.21.0
 huggingface-hub>=0.16.0
 
+# NLP Processing - spaCy
+spacy>=3.7.0
+
 # Utility libraries
 pandas>=2.0.0
 requests>=2.31.0
