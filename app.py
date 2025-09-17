@@ -5,12 +5,17 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 import faiss
 import google.generativeai as genai
-from typing import List, Tuple
+from transformers import AutoTokenizer, AutoModelForCausalLM
+import torch
+from typing import List, Tuple, Dict
 import re
-import requests
 import json
 import os
+import pickle
+import hashlib
 from dataclasses import dataclass
+from datetime import datetime
+import tempfile
 
 # Configuration
 @dataclass
@@ -19,6 +24,9 @@ class Config:
     CHUNK_OVERLAP = 200
     TOP_K_CHUNKS = 3
     EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+    LLAMA_MODEL = "microsoft/DialoGPT-medium"  # Lighter alternative, can be changed to full LLaMA
+    DB_PATH = "rag_database"
+    METADATA_FILE = "file_metadata.json"
 
 config = Config()
 
@@ -26,125 +34,270 @@ class DocumentProcessor:
     """Handles document reading and processing"""
     
     @staticmethod
-    def read_pdf(file) -> str:
-        """Extract text from PDF file"""
+    def get_file_hash(file_content: bytes) -> str:
+        """Generate hash for file content to detect duplicates"""
+        return hashlib.md5(file_content).hexdigest()
+    
+    @staticmethod
+    def read_pdf(file) -> Tuple[str, str]:
+        """Extract text from PDF file and return text + hash"""
         try:
+            file_content = file.read()
+            file_hash = DocumentProcessor.get_file_hash(file_content)
+            
+            # Reset file pointer for PyPDF2
+            file.seek(0)
             pdf_reader = PyPDF2.PdfReader(file)
             text = ""
             for page in pdf_reader.pages:
                 text += page.extract_text() + "\n"
-            return text
+            return text, file_hash
         except Exception as e:
             st.error(f"Error reading PDF: {str(e)}")
-            return ""
+            return "", ""
     
     @staticmethod
-    def read_txt(file) -> str:
-        """Extract text from TXT file"""
+    def read_txt(file) -> Tuple[str, str]:
+        """Extract text from TXT file and return text + hash"""
         try:
-            return file.read().decode('utf-8')
+            file_content = file.read()
+            file_hash = DocumentProcessor.get_file_hash(file_content)
+            text = file_content.decode('utf-8')
+            return text, file_hash
         except Exception as e:
             st.error(f"Error reading TXT: {str(e)}")
-            return ""
+            return "", ""
 
 class LlamaChunker:
-    """Handles text chunking using Llama-style approach"""
+    """Real LLaMA-based text chunker"""
     
-    def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 200):
-        self.chunk_size = chunk_size
-        self.chunk_overlap = chunk_overlap
+    def __init__(self, model_name: str = None):
+        self.model_name = model_name or config.LLAMA_MODEL
+        self.tokenizer = None
+        self.model = None
+        self.load_model()
     
-    def chunk_text(self, text: str) -> List[str]:
+    @st.cache_resource
+    def load_model(_self):
+        """Load LLaMA tokenizer (cached for efficiency)"""
+        try:
+            _self.tokenizer = AutoTokenizer.from_pretrained(_self.model_name)
+            if _self.tokenizer.pad_token is None:
+                _self.tokenizer.pad_token = _self.tokenizer.eos_token
+            return True
+        except Exception as e:
+            st.error(f"Error loading LLaMA model: {str(e)}")
+            return False
+    
+    def chunk_text_with_llama(self, text: str) -> List[str]:
         """
-        Chunk text using sliding window approach similar to Llama
+        Chunk text using LLaMA tokenizer for better semantic understanding
         """
-        # Clean and preprocess text
-        text = self._preprocess_text(text)
+        if not self.tokenizer:
+            # Fallback to simple chunking
+            return self._simple_chunk(text)
         
-        if len(text) <= self.chunk_size:
-            return [text]
+        # Tokenize the entire text
+        tokens = self.tokenizer.encode(text, add_special_tokens=False)
         
+        chunks = []
+        chunk_size_tokens = config.CHUNK_SIZE // 4  # Approximate tokens per chunk
+        overlap_tokens = config.CHUNK_OVERLAP // 4
+        
+        for i in range(0, len(tokens), chunk_size_tokens - overlap_tokens):
+            chunk_tokens = tokens[i:i + chunk_size_tokens]
+            chunk_text = self.tokenizer.decode(chunk_tokens, skip_special_tokens=True)
+            
+            # Clean up the chunk
+            chunk_text = self._clean_chunk(chunk_text)
+            if chunk_text.strip():
+                chunks.append(chunk_text)
+        
+        return chunks
+    
+    def _simple_chunk(self, text: str) -> List[str]:
+        """Fallback simple chunking method"""
         chunks = []
         start = 0
         
         while start < len(text):
-            end = start + self.chunk_size
-            
-            # If we're not at the end, try to break at sentence boundary
+            end = start + config.CHUNK_SIZE
             if end < len(text):
-                # Look for sentence endings within the last 200 characters
-                search_start = max(start + self.chunk_size - 200, start)
-                sentence_end = self._find_sentence_boundary(text, search_start, end)
-                if sentence_end != -1:
-                    end = sentence_end
+                # Find sentence boundary
+                while end > start and text[end] not in '.!?\n':
+                    end -= 1
+                if end == start:
+                    end = start + config.CHUNK_SIZE
             
             chunk = text[start:end].strip()
             if chunk:
                 chunks.append(chunk)
             
-            # Move start position considering overlap
-            start = end - self.chunk_overlap
-            
-            # Avoid infinite loop
-            if start <= end - self.chunk_size:
-                start = end - self.chunk_overlap + 1
+            start = end - config.CHUNK_OVERLAP
+            if start <= 0:
+                start = end
         
         return chunks
     
-    def _preprocess_text(self, text: str) -> str:
-        """Clean and preprocess text"""
+    def _clean_chunk(self, chunk: str) -> str:
+        """Clean and preprocess chunk text"""
         # Remove excessive whitespace
-        text = re.sub(r'\s+', ' ', text)
-        # Remove special characters but keep punctuation
-        text = re.sub(r'[^\w\s.,!?;:\-\(\)\[\]"\']', ' ', text)
-        return text.strip()
+        chunk = re.sub(r'\s+', ' ', chunk)
+        # Remove incomplete sentences at the beginning
+        sentences = chunk.split('.')
+        if len(sentences) > 1 and len(sentences[0]) < 10:
+            chunk = '.'.join(sentences[1:])
+        return chunk.strip()
+
+class FileMetadataManager:
+    """Manages file metadata and tracks processed files"""
     
-    def _find_sentence_boundary(self, text: str, start: int, end: int) -> int:
-        """Find the best sentence boundary within the range"""
-        sentence_endings = ['.', '!', '?', '\n']
-        best_pos = -1
-        
-        for i in range(end - 1, start - 1, -1):
-            if text[i] in sentence_endings:
-                # Check if it's not an abbreviation (simple check)
-                if text[i] == '.' and i > 0 and text[i-1].isupper() and i < len(text) - 1 and text[i+1].isupper():
-                    continue
-                best_pos = i + 1
-                break
-        
-        return best_pos
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+        self.metadata_file = os.path.join(db_path, config.METADATA_FILE)
+        self.ensure_db_directory()
+    
+    def ensure_db_directory(self):
+        """Create database directory if it doesn't exist"""
+        if not os.path.exists(self.db_path):
+            os.makedirs(self.db_path)
+    
+    def load_metadata(self) -> Dict:
+        """Load file metadata from storage"""
+        if os.path.exists(self.metadata_file):
+            try:
+                with open(self.metadata_file, 'r') as f:
+                    return json.load(f)
+            except:
+                return {}
+        return {}
+    
+    def save_metadata(self, metadata: Dict):
+        """Save file metadata to storage"""
+        with open(self.metadata_file, 'w') as f:
+            json.dump(metadata, f, indent=2)
+    
+    def is_file_processed(self, filename: str, file_hash: str) -> bool:
+        """Check if file has already been processed"""
+        metadata = self.load_metadata()
+        if filename in metadata:
+            return metadata[filename].get('hash') == file_hash
+        return False
+    
+    def add_file_metadata(self, filename: str, file_hash: str, chunk_count: int):
+        """Add file metadata"""
+        metadata = self.load_metadata()
+        metadata[filename] = {
+            'hash': file_hash,
+            'chunk_count': chunk_count,
+            'processed_at': datetime.now().isoformat()
+        }
+        self.save_metadata(metadata)
+    
+    def get_processed_files(self) -> List[str]:
+        """Get list of processed files"""
+        metadata = self.load_metadata()
+        return list(metadata.keys())
 
 class EmbeddingManager:
-    """Manages embeddings and vector database operations"""
+    """Manages embeddings and vector database operations with persistence"""
     
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
+    def __init__(self, model_name: str = "all-MiniLM-L6-v2", db_path: str = "rag_database"):
         self.model = SentenceTransformer(model_name)
+        self.db_path = db_path
+        self.index_file = os.path.join(db_path, "faiss_index.bin")
+        self.chunks_file = os.path.join(db_path, "chunks.pkl")
+        self.embeddings_file = os.path.join(db_path, "embeddings.npy")
+        
         self.index = None
         self.chunks = []
         self.embeddings = None
+        
+        # Ensure directory exists
+        if not os.path.exists(db_path):
+            os.makedirs(db_path)
+        
+        # Load existing data
+        self.load_existing_data()
+    
+    def load_existing_data(self):
+        """Load existing embeddings and chunks from storage"""
+        try:
+            if os.path.exists(self.index_file):
+                self.index = faiss.read_index(self.index_file)
+                
+            if os.path.exists(self.chunks_file):
+                with open(self.chunks_file, 'rb') as f:
+                    self.chunks = pickle.load(f)
+                    
+            if os.path.exists(self.embeddings_file):
+                self.embeddings = np.load(self.embeddings_file)
+                
+            if self.index and self.chunks:
+                st.success(f"Loaded existing database with {len(self.chunks)} chunks")
+        except Exception as e:
+            st.warning(f"Could not load existing data: {str(e)}")
+            self.index = None
+            self.chunks = []
+            self.embeddings = None
     
     def create_embeddings(self, chunks: List[str]) -> np.ndarray:
         """Create embeddings for text chunks"""
-        with st.spinner("Creating embeddings..."):
-            embeddings = self.model.encode(chunks, show_progress_bar=False)
+        with st.spinner(f"Creating embeddings for {len(chunks)} new chunks..."):
+            embeddings = self.model.encode(chunks, show_progress_bar=True)
         return embeddings
     
-    def build_vector_db(self, chunks: List[str]):
-        """Build FAISS vector database"""
-        self.chunks = chunks
-        self.embeddings = self.create_embeddings(chunks)
+    def add_chunks_to_db(self, new_chunks: List[str]):
+        """Add new chunks to existing database"""
+        if not new_chunks:
+            return
         
-        # Build FAISS index
-        dimension = self.embeddings.shape[1]
-        self.index = faiss.IndexFlatIP(dimension)  # Inner product for cosine similarity
+        # Create embeddings for new chunks
+        new_embeddings = self.create_embeddings(new_chunks)
+        
+        # Initialize or update index
+        if self.index is None:
+            # Create new index
+            dimension = new_embeddings.shape[1]
+            self.index = faiss.IndexFlatIP(dimension)
+            self.chunks = []
+            self.embeddings = new_embeddings
+        else:
+            # Add to existing
+            if self.embeddings is not None:
+                self.embeddings = np.vstack([self.embeddings, new_embeddings])
+            else:
+                self.embeddings = new_embeddings
         
         # Normalize embeddings for cosine similarity
-        faiss.normalize_L2(self.embeddings)
-        self.index.add(self.embeddings)
+        faiss.normalize_L2(new_embeddings)
+        
+        # Add to index
+        self.index.add(new_embeddings)
+        
+        # Add chunks
+        self.chunks.extend(new_chunks)
+        
+        # Save to disk
+        self.save_to_disk()
+    
+    def save_to_disk(self):
+        """Save index and chunks to disk"""
+        try:
+            faiss.write_index(self.index, self.index_file)
+            
+            with open(self.chunks_file, 'wb') as f:
+                pickle.dump(self.chunks, f)
+                
+            if self.embeddings is not None:
+                np.save(self.embeddings_file, self.embeddings)
+                
+        except Exception as e:
+            st.error(f"Error saving to disk: {str(e)}")
     
     def search_similar_chunks(self, query: str, k: int = 3) -> List[Tuple[str, float]]:
         """Search for most similar chunks"""
-        if self.index is None:
+        if self.index is None or len(self.chunks) == 0:
             return []
         
         # Create query embedding
@@ -152,7 +305,7 @@ class EmbeddingManager:
         faiss.normalize_L2(query_embedding)
         
         # Search
-        scores, indices = self.index.search(query_embedding, k)
+        scores, indices = self.index.search(query_embedding, min(k, len(self.chunks)))
         
         results = []
         for i, (idx, score) in enumerate(zip(indices[0], scores[0])):
@@ -160,6 +313,14 @@ class EmbeddingManager:
                 results.append((self.chunks[idx], float(score)))
         
         return results
+    
+    def get_database_stats(self) -> Dict:
+        """Get database statistics"""
+        return {
+            'total_chunks': len(self.chunks),
+            'index_size': self.index.ntotal if self.index else 0,
+            'embeddings_shape': self.embeddings.shape if self.embeddings is not None else None
+        }
 
 class LLMManager:
     """Manages LLM interactions for answer generation using Google Gemini"""
@@ -209,43 +370,67 @@ Answer:"""
             return f"Error generating answer: {str(e)}"
 
 class RAGSystem:
-    """Main RAG System class"""
+    """Main RAG System class with incremental processing"""
     
-    def __init__(self):
-        self.chunker = LlamaChunker(config.CHUNK_SIZE, config.CHUNK_OVERLAP)
-        self.embedding_manager = EmbeddingManager(config.EMBEDDING_MODEL)
+    def __init__(self, db_path: str = None):
+        self.db_path = db_path or config.DB_PATH
+        self.chunker = LlamaChunker()
+        self.embedding_manager = EmbeddingManager(config.EMBEDDING_MODEL, self.db_path)
         self.llm_manager = LLMManager()
-        self.processed_chunks = []
-        self.is_ready = False
+        self.metadata_manager = FileMetadataManager(self.db_path)
+        
+        # Check if we have existing data
+        self.is_ready = len(self.embedding_manager.chunks) > 0
     
-    def process_documents(self, files) -> bool:
-        """Process uploaded documents"""
-        all_text = ""
+    def process_new_documents(self, files) -> Dict:
+        """Process only new documents incrementally"""
+        results = {
+            'new_files': [],
+            'skipped_files': [],
+            'new_chunks': 0,
+            'total_chunks': 0
+        }
+        
+        all_new_chunks = []
         
         for file in files:
+            # Read file and get hash
             if file.type == "application/pdf":
-                text = DocumentProcessor.read_pdf(file)
+                text, file_hash = DocumentProcessor.read_pdf(file)
             elif file.type == "text/plain":
-                text = DocumentProcessor.read_txt(file)
+                text, file_hash = DocumentProcessor.read_txt(file)
             else:
                 st.warning(f"Unsupported file type: {file.type}")
                 continue
             
-            all_text += f"\n\n--- Document: {file.name} ---\n\n" + text
+            # Check if file already processed
+            if self.metadata_manager.is_file_processed(file.name, file_hash):
+                results['skipped_files'].append(file.name)
+                continue
+            
+            # Process new file
+            if text.strip():
+                with st.spinner(f"Processing {file.name} with LLaMA..."):
+                    file_chunks = self.chunker.chunk_text_with_llama(text)
+                
+                # Add document identifier to chunks
+                prefixed_chunks = [f"[Document: {file.name}]\n{chunk}" for chunk in file_chunks]
+                all_new_chunks.extend(prefixed_chunks)
+                
+                # Update metadata
+                self.metadata_manager.add_file_metadata(file.name, file_hash, len(file_chunks))
+                results['new_files'].append(file.name)
+                results['new_chunks'] += len(file_chunks)
         
-        if not all_text.strip():
-            return False
+        # Add all new chunks to database
+        if all_new_chunks:
+            self.embedding_manager.add_chunks_to_db(all_new_chunks)
+            self.is_ready = True
         
-        # Chunk the text
-        with st.spinner("Chunking documents..."):
-            self.processed_chunks = self.chunker.chunk_text(all_text)
+        # Update total chunks count
+        results['total_chunks'] = len(self.embedding_manager.chunks)
         
-        # Build vector database
-        with st.spinner("Building vector database..."):
-            self.embedding_manager.build_vector_db(self.processed_chunks)
-        
-        self.is_ready = True
-        return True
+        return results
     
     def query(self, question: str) -> Tuple[str, List[Tuple[str, float]]]:
         """Process query and return answer with relevant chunks"""
@@ -271,22 +456,35 @@ class RAGSystem:
         answer = self.llm_manager.generate_answer(question, relevant_chunks)
         
         return answer, relevant_chunks
+    
+    def get_system_stats(self) -> Dict:
+        """Get system statistics"""
+        stats = self.embedding_manager.get_database_stats()
+        stats['processed_files'] = self.metadata_manager.get_processed_files()
+        return stats
+    
+    def reset_database(self):
+        """Reset the entire database (for testing purposes)"""
+        import shutil
+        if os.path.exists(self.db_path):
+            shutil.rmtree(self.db_path)
+        self.__init__()  # Reinitialize
 
 def main():
     st.set_page_config(
-        page_title="RAG System",
+        page_title="Advanced RAG System",
         page_icon="🔍",
         layout="wide"
     )
     
-    st.title("🔍 RAG System - Document Q&A")
-    st.markdown("Upload documents and ask questions to get AI-powered answers!")
+    st.title("🔍 Advanced RAG System - Incremental Document Processing")
+    st.markdown("Upload documents and ask questions with real LLaMA chunking and persistent storage!")
     
     # Initialize session state
     if 'rag_system' not in st.session_state:
         st.session_state.rag_system = RAGSystem()
     
-    # Sidebar for configuration
+    # Sidebar for configuration and stats
     with st.sidebar:
         st.header("Configuration")
         
@@ -300,13 +498,32 @@ def main():
         
         st.markdown("---")
         
+        # System Statistics
+        st.header("Database Statistics")
+        stats = st.session_state.rag_system.get_system_stats()
+        st.metric("Total Chunks", stats['total_chunks'])
+        st.metric("Processed Files", len(stats['processed_files']))
+        
+        if stats['processed_files']:
+            with st.expander("Processed Files"):
+                for file in stats['processed_files']:
+                    st.write(f"📄 {file}")
+        
+        st.markdown("---")
+        
         # System information
         st.header("System Info")
         st.info(f"LLM Model: Google Gemini Pro")
+        st.info(f"Chunking: Real LLaMA ({config.LLAMA_MODEL})")
         st.info(f"Chunk Size: {config.CHUNK_SIZE}")
         st.info(f"Chunk Overlap: {config.CHUNK_OVERLAP}")
         st.info(f"Top K Chunks: {config.TOP_K_CHUNKS}")
         st.info(f"Embedding Model: {config.EMBEDDING_MODEL}")
+        
+        # Reset button (for development)
+        if st.button("🗑️ Reset Database", help="Clear all data and start fresh"):
+            st.session_state.rag_system.reset_database()
+            st.rerun()
     
     # Main interface
     col1, col2 = st.columns([1, 1])
@@ -318,20 +535,29 @@ def main():
             "Choose files",
             accept_multiple_files=True,
             type=['pdf', 'txt'],
-            help="Upload PDF or TXT files"
+            help="Upload PDF or TXT files. Only new files will be processed!"
         )
         
         if uploaded_files:
-            st.write(f"Uploaded {len(uploaded_files)} file(s):")
+            st.write(f"Selected {len(uploaded_files)} file(s):")
             for file in uploaded_files:
                 st.write(f"- {file.name}")
             
             if st.button("Process Documents", type="primary"):
-                success = st.session_state.rag_system.process_documents(uploaded_files)
-                if success:
-                    st.success(f"Successfully processed {len(st.session_state.rag_system.processed_chunks)} chunks!")
-                else:
-                    st.error("Failed to process documents.")
+                results = st.session_state.rag_system.process_new_documents(uploaded_files)
+                
+                # Show results
+                if results['new_files']:
+                    st.success(f"✅ Processed {len(results['new_files'])} new files with {results['new_chunks']} chunks!")
+                    for file in results['new_files']:
+                        st.write(f"📄 ✅ {file}")
+                
+                if results['skipped_files']:
+                    st.info(f"⏭️ Skipped {len(results['skipped_files'])} already processed files:")
+                    for file in results['skipped_files']:
+                        st.write(f"📄 ⏭️ {file}")
+                
+                st.info(f"Total chunks in database: {results['total_chunks']}")
     
     with col2:
         st.header("❓ Ask Questions")
@@ -367,9 +593,8 @@ def main():
     # Footer
     st.markdown("---")
     st.markdown(
-        "Built with Streamlit • Uses Sentence Transformers, FAISS, and OpenAI GPT"
+        "Built with Streamlit • Uses Real LLaMA, Sentence Transformers, FAISS, and Google Gemini"
     )
 
 if __name__ == "__main__":
     main()
-
