@@ -1,726 +1,276 @@
 import streamlit as st
-import os
-import hashlib
-import json
-from typing import List, Dict, Any, Tuple
-import pandas as pd
-from pathlib import Path
-import tempfile
-import shutil
-
-# Document processing
 import PyPDF2
-import docx
-import csv
-from io import StringIO
-
-# Vector database and embeddings
-import faiss
-import pickle
+import io
 import numpy as np
 from sentence_transformers import SentenceTransformer
-
-# Text processing
-import nltk
-from nltk.tokenize import sent_tokenize
+import faiss
+import google.generativeai as genai
+from typing import List, Tuple
 import re
+import requests
+import json
+import os
+from dataclasses import dataclass
 
-# Download required NLTK data
-try:
-    nltk.data.find('tokenizers/punkt')
-except LookupError:
-    nltk.download('punkt')
+# Configuration
+@dataclass
+class Config:
+    CHUNK_SIZE = 1000
+    CHUNK_OVERLAP = 200
+    TOP_K_CHUNKS = 3
+    EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
-# Safely try to import ChromaDB
-def try_import_chromadb():
-    """Safely import ChromaDB, return None if not available"""
-    try:
-        import chromadb
-        from chromadb.config import Settings
-        return chromadb, Settings
-    except (ImportError, RuntimeError, Exception) as e:
-        return None, None
-
-# Check ChromaDB availability
-chromadb, Settings = try_import_chromadb()
-CHROMADB_AVAILABLE = chromadb is not None
+config = Config()
 
 class DocumentProcessor:
-    """Handles document parsing and text extraction"""
+    """Handles document reading and processing"""
     
     @staticmethod
-    def extract_text_from_pdf(file_path: str) -> List[Dict[str, Any]]:
-        """Extract text from PDF with page information"""
-        chunks = []
+    def read_pdf(file) -> str:
+        """Extract text from PDF file"""
         try:
-            with open(file_path, 'rb') as file:
-                pdf_reader = PyPDF2.PdfReader(file)
-                for page_num, page in enumerate(pdf_reader.pages):
-                    text = page.extract_text()
-                    if text.strip():
-                        chunks.append({
-                            'text': text,
-                            'page': page_num + 1,
-                            'type': 'page'
-                        })
+            pdf_reader = PyPDF2.PdfReader(file)
+            text = ""
+            for page in pdf_reader.pages:
+                text += page.extract_text() + "\n"
+            return text
         except Exception as e:
-            st.error(f"Error processing PDF: {str(e)}")
-        return chunks
+            st.error(f"Error reading PDF: {str(e)}")
+            return ""
     
     @staticmethod
-    def extract_text_from_docx(file_path: str) -> List[Dict[str, Any]]:
-        """Extract text from DOCX with paragraph information"""
-        chunks = []
+    def read_txt(file) -> str:
+        """Extract text from TXT file"""
         try:
-            doc = docx.Document(file_path)
-            for para_num, paragraph in enumerate(doc.paragraphs):
-                text = paragraph.text.strip()
-                if text:
-                    chunks.append({
-                        'text': text,
-                        'paragraph': para_num + 1,
-                        'type': 'paragraph'
-                    })
+            return file.read().decode('utf-8')
         except Exception as e:
-            st.error(f"Error processing DOCX: {str(e)}")
-        return chunks
-    
-    @staticmethod
-    def extract_text_from_txt(file_path: str) -> List[Dict[str, Any]]:
-        """Extract text from TXT with line information"""
-        chunks = []
-        try:
-            with open(file_path, 'r', encoding='utf-8') as file:
-                lines = file.readlines()
-                for line_num, line in enumerate(lines):
-                    text = line.strip()
-                    if text:
-                        chunks.append({
-                            'text': text,
-                            'line': line_num + 1,
-                            'type': 'line'
-                        })
-        except Exception as e:
-            st.error(f"Error processing TXT: {str(e)}")
-        return chunks
-    
-    @staticmethod
-    def extract_text_from_csv(file_path: str) -> List[Dict[str, Any]]:
-        """Extract text from CSV with row information"""
-        chunks = []
-        try:
-            df = pd.read_csv(file_path)
-            for row_num, row in df.iterrows():
-                # Convert row to text
-                text = ' | '.join([f"{col}: {val}" for col, val in row.items() if pd.notna(val)])
-                if text:
-                    chunks.append({
-                        'text': text,
-                        'row': row_num + 1,
-                        'type': 'row'
-                    })
-        except Exception as e:
-            st.error(f"Error processing CSV: {str(e)}")
-        return chunks
+            st.error(f"Error reading TXT: {str(e)}")
+            return ""
 
-class TextChunker:
-    """Handles text chunking with overlap"""
+class LlamaChunker:
+    """Handles text chunking using Llama-style approach"""
     
-    @staticmethod
-    def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]:
-        """Split text into overlapping chunks"""
-
-        try:
-            sentences = sent_tokenize(text)
-        except LookupError:
-            # Fallback to simple sentence splitting
-            sentences = re.split(r'[.!?]+', text)
-            sentences = [s.strip() for s in sentences if s.strip()]
-            
+    def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 200):
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
+    
+    def chunk_text(self, text: str) -> List[str]:
+        """
+        Chunk text using sliding window approach similar to Llama
+        """
+        # Clean and preprocess text
+        text = self._preprocess_text(text)
+        
+        if len(text) <= self.chunk_size:
+            return [text]
         
         chunks = []
-        current_chunk = []
-        current_length = 0
+        start = 0
         
-        for sentence in sentences:
-            sentence_length = len(sentence.split())
+        while start < len(text):
+            end = start + self.chunk_size
             
-            if current_length + sentence_length > chunk_size and current_chunk:
-                chunks.append(' '.join(current_chunk))
-                
-                # Create overlap
-                overlap_sentences = []
-                overlap_length = 0
-                for sent in reversed(current_chunk):
-                    sent_length = len(sent.split())
-                    if overlap_length + sent_length <= overlap:
-                        overlap_sentences.insert(0, sent)
-                        overlap_length += sent_length
-                    else:
-                        break
-                
-                current_chunk = overlap_sentences
-                current_length = overlap_length
+            # If we're not at the end, try to break at sentence boundary
+            if end < len(text):
+                # Look for sentence endings within the last 200 characters
+                search_start = max(start + self.chunk_size - 200, start)
+                sentence_end = self._find_sentence_boundary(text, search_start, end)
+                if sentence_end != -1:
+                    end = sentence_end
             
-            current_chunk.append(sentence)
-            current_length += sentence_length
-        
-        if current_chunk:
-            chunks.append(' '.join(current_chunk))
+            chunk = text[start:end].strip()
+            if chunk:
+                chunks.append(chunk)
+            
+            # Move start position considering overlap
+            start = end - self.chunk_overlap
+            
+            # Avoid infinite loop
+            if start <= end - self.chunk_size:
+                start = end - self.chunk_overlap + 1
         
         return chunks
+    
+    def _preprocess_text(self, text: str) -> str:
+        """Clean and preprocess text"""
+        # Remove excessive whitespace
+        text = re.sub(r'\s+', ' ', text)
+        # Remove special characters but keep punctuation
+        text = re.sub(r'[^\w\s.,!?;:\-\(\)\[\]"\']', ' ', text)
+        return text.strip()
+    
+    def _find_sentence_boundary(self, text: str, start: int, end: int) -> int:
+        """Find the best sentence boundary within the range"""
+        sentence_endings = ['.', '!', '?', '\n']
+        best_pos = -1
+        
+        for i in range(end - 1, start - 1, -1):
+            if text[i] in sentence_endings:
+                # Check if it's not an abbreviation (simple check)
+                if text[i] == '.' and i > 0 and text[i-1].isupper() and i < len(text) - 1 and text[i+1].isupper():
+                    continue
+                best_pos = i + 1
+                break
+        
+        return best_pos
 
-class VectorDatabase:
-    """Abstract vector database interface"""
+class EmbeddingManager:
+    """Manages embeddings and vector database operations"""
     
-    def __init__(self, db_path: str, embedding_dim: int = 384):
-        self.db_path = db_path
-        self.embedding_dim = embedding_dim
-        self.metadata_file = os.path.join(db_path, "vector_metadata.json")
-        os.makedirs(db_path, exist_ok=True)
+    def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
+        self.model = SentenceTransformer(model_name)
+        self.index = None
+        self.chunks = []
+        self.embeddings = None
+    
+    def create_embeddings(self, chunks: List[str]) -> np.ndarray:
+        """Create embeddings for text chunks"""
+        with st.spinner("Creating embeddings..."):
+            embeddings = self.model.encode(chunks, show_progress_bar=False)
+        return embeddings
+    
+    def build_vector_db(self, chunks: List[str]):
+        """Build FAISS vector database"""
+        self.chunks = chunks
+        self.embeddings = self.create_embeddings(chunks)
         
-    def add(self, embeddings: List[List[float]], documents: List[str], 
-            metadatas: List[Dict], ids: List[str]):
-        raise NotImplementedError
-    
-    def query(self, query_embeddings: List[List[float]], n_results: int = 5):
-        raise NotImplementedError
-    
-    def delete(self, ids: List[str]):
-        raise NotImplementedError
-    
-    def get(self, where: Dict = None, include: List[str] = None):
-        raise NotImplementedError
-
-class FAISSDatabase(VectorDatabase):
-    """FAISS-based vector database implementation"""
-    
-    def __init__(self, db_path: str, embedding_dim: int = 384):
-        super().__init__(db_path, embedding_dim)
-        self.index_file = os.path.join(db_path, "faiss_index.bin")
-        self.documents_file = os.path.join(db_path, "documents.pkl")
-        self.metadatas_file = os.path.join(db_path, "metadatas.pkl")
-        self.ids_file = os.path.join(db_path, "ids.pkl")
+        # Build FAISS index
+        dimension = self.embeddings.shape[1]
+        self.index = faiss.IndexFlatIP(dimension)  # Inner product for cosine similarity
         
-        # Initialize FAISS index
-        self.index = faiss.IndexFlatIP(embedding_dim)  # Inner product for cosine similarity
-        
-        # Load existing data
-        self.load_data()
-    
-    def load_data(self):
-        """Load existing index and metadata"""
-        try:
-            if os.path.exists(self.index_file):
-                self.index = faiss.read_index(self.index_file)
-            
-            if os.path.exists(self.documents_file):
-                with open(self.documents_file, 'rb') as f:
-                    self.documents = pickle.load(f)
-            else:
-                self.documents = []
-            
-            if os.path.exists(self.metadatas_file):
-                with open(self.metadatas_file, 'rb') as f:
-                    self.metadatas = pickle.load(f)
-            else:
-                self.metadatas = []
-            
-            if os.path.exists(self.ids_file):
-                with open(self.ids_file, 'rb') as f:
-                    self.ids = pickle.load(f)
-            else:
-                self.ids = []
-                
-        except Exception as e:
-            print(f"Error loading FAISS data: {e}")
-            self.documents = []
-            self.metadatas = []
-            self.ids = []
-    
-    def save_data(self):
-        """Save index and metadata"""
-        try:
-            faiss.write_index(self.index, self.index_file)
-            
-            with open(self.documents_file, 'wb') as f:
-                pickle.dump(self.documents, f)
-            
-            with open(self.metadatas_file, 'wb') as f:
-                pickle.dump(self.metadatas, f)
-            
-            with open(self.ids_file, 'wb') as f:
-                pickle.dump(self.ids, f)
-                
-        except Exception as e:
-            print(f"Error saving FAISS data: {e}")
-    
-    def add(self, embeddings: List[List[float]], documents: List[str], 
-            metadatas: List[Dict], ids: List[str]):
-        """Add vectors to the index"""
         # Normalize embeddings for cosine similarity
-        embeddings_array = np.array(embeddings, dtype=np.float32)
-        faiss.normalize_L2(embeddings_array)
-        
-        # Add to index
-        self.index.add(embeddings_array)
-        
-        # Store metadata
-        self.documents.extend(documents)
-        self.metadatas.extend(metadatas)
-        self.ids.extend(ids)
-        
-        # Save data
-        self.save_data()
+        faiss.normalize_L2(self.embeddings)
+        self.index.add(self.embeddings)
     
-    def query(self, query_embeddings: List[List[float]], n_results: int = 5):
-        """Query the index"""
-        if self.index.ntotal == 0:
-            return {'documents': [[]], 'metadatas': [[]], 'distances': [[]]}
+    def search_similar_chunks(self, query: str, k: int = 3) -> List[Tuple[str, float]]:
+        """Search for most similar chunks"""
+        if self.index is None:
+            return []
         
-        # Normalize query embeddings
-        query_array = np.array(query_embeddings, dtype=np.float32)
-        faiss.normalize_L2(query_array)
+        # Create query embedding
+        query_embedding = self.model.encode([query])
+        faiss.normalize_L2(query_embedding)
         
         # Search
-        distances, indices = self.index.search(query_array, min(n_results, self.index.ntotal))
+        scores, indices = self.index.search(query_embedding, k)
         
-        # Format results
-        documents = []
-        metadatas = []
-        result_distances = []
+        results = []
+        for i, (idx, score) in enumerate(zip(indices[0], scores[0])):
+            if idx < len(self.chunks):
+                results.append((self.chunks[idx], float(score)))
         
-        for i, (dist_row, idx_row) in enumerate(zip(distances, indices)):
-            docs = []
-            metas = []
-            dists = []
-            
-            for dist, idx in zip(dist_row, idx_row):
-                if idx != -1:  # Valid index
-                    docs.append(self.documents[idx])
-                    metas.append(self.metadatas[idx])
-                    dists.append(1.0 - dist)  # Convert similarity back to distance
-            
-            documents.append(docs)
-            metadatas.append(metas)
-            result_distances.append(dists)
-        
-        return {
-            'documents': documents,
-            'metadatas': metadatas,
-            'distances': result_distances
-        }
-    
-    def delete(self, ids: List[str]):
-        """Delete vectors by IDs"""
-        # Find indices to remove
-        indices_to_remove = []
-        for id_to_remove in ids:
-            if id_to_remove in self.ids:
-                idx = self.ids.index(id_to_remove)
-                indices_to_remove.append(idx)
-        
-        if not indices_to_remove:
-            return
-        
-        # Remove from metadata lists (in reverse order to maintain indices)
-        for idx in sorted(indices_to_remove, reverse=True):
-            del self.documents[idx]
-            del self.metadatas[idx]
-            del self.ids[idx]
-        
-        # Rebuild FAISS index (FAISS doesn't support efficient deletion)
-        self.index = faiss.IndexFlatIP(self.embedding_dim)
-        self.save_data()
-        return True
-    
-    def get(self, where: Dict = None, include: List[str] = None):
-        """Get vectors by metadata filter"""
-        result_ids = []
-        result_metadatas = []
-        
-        for i, metadata in enumerate(self.metadatas):
-            if where is None:
-                result_ids.append(self.ids[i])
-                result_metadatas.append(metadata)
-            else:
-                # Simple metadata matching
-                match = True
-                for key, value in where.items():
-                    if key not in metadata or metadata[key] != value:
-                        match = False
-                        break
-                
-                if match:
-                    result_ids.append(self.ids[i])
-                    result_metadatas.append(metadata)
-        
-        return {
-            'ids': result_ids,
-            'metadatas': result_metadatas
-        }
+        return results
 
-class ChromaDatabase(VectorDatabase):
-    """ChromaDB-based vector database implementation"""
-    
-    def __init__(self, db_path: str, embedding_dim: int = 384):
-        super().__init__(db_path, embedding_dim)
-        
-        if not CHROMADB_AVAILABLE:
-            raise RuntimeError("ChromaDB is not available")
-        
-        # Initialize ChromaDB
-        self.client = chromadb.PersistentClient(path=db_path)
-        self.collection = self.client.get_or_create_collection(
-            name="documents",
-            metadata={"hnsw:space": "cosine"}
-        )
-    
-    def add(self, embeddings: List[List[float]], documents: List[str], 
-            metadatas: List[Dict], ids: List[str]):
-        """Add vectors to ChromaDB"""
-        self.collection.add(
-            embeddings=embeddings,
-            documents=documents,
-            metadatas=metadatas,
-            ids=ids
-        )
-    
-    def query(self, query_embeddings: List[List[float]], n_results: int = 5):
-        """Query ChromaDB"""
-        return self.collection.query(
-            query_embeddings=query_embeddings,
-            n_results=n_results,
-            include=["documents", "metadatas", "distances"]
-        )
-    
-    def delete(self, ids: List[str]):
-        """Delete from ChromaDB"""
-        self.collection.delete(ids=ids)
-        return True
-    
-    def get(self, where: Dict = None, include: List[str] = None):
-        """Get from ChromaDB"""
-        return self.collection.get(
-            where=where,
-            include=include or ["metadatas"]
-        )
-
-class RAGSystem:
-    """Main RAG system class"""
+class LLMManager:
+    """Manages LLM interactions for answer generation using Google Gemini"""
     
     def __init__(self):
-        self.db_path = "rag_database"
-        self.metadata_file = "file_metadata.json"
-        
-        # Initialize vector database (try ChromaDB first, fallback to FAISS)
+        self.model = None
+    
+    def initialize_gemini(self, api_key: str):
+        """Initialize Gemini client"""
         try:
-            if CHROMADB_AVAILABLE:
-                self.vector_db = ChromaDatabase(self.db_path)
-                st.success("✅ Using ChromaDB for vector storage")
-            else:
-                raise RuntimeError("ChromaDB not available")
+            genai.configure(api_key=api_key)
+            self.model = genai.GenerativeModel('gemini-pro')
+            return True
         except Exception as e:
-            self.vector_db = FAISSDatabase(self.db_path)
-            st.warning("⚠️ Using FAISS for vector storage (ChromaDB not available)")
-            if "sqlite3" in str(e).lower():
-                st.info("💡 ChromaDB requires SQLite 3.35+. FAISS works great as an alternative!")
-        
-        # Initialize embedding model
-        self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-        
-        # Store embedding dimension
-        self.embedding_dim = self.embedding_model.get_sentence_embedding_dimension()
-        
-        # Initialize document processor and chunker
-        self.doc_processor = DocumentProcessor()
-        self.text_chunker = TextChunker()
-        
-        # Load metadata
-        self.load_metadata()
+            st.error(f"Error initializing Gemini: {str(e)}")
+            return False
     
-    def load_metadata(self):
-        """Load file metadata"""
-        if os.path.exists(self.metadata_file):
-            with open(self.metadata_file, 'r') as f:
-                self.metadata = json.load(f)
-        else:
-            self.metadata = {}
-    
-    def save_metadata(self):
-        """Save file metadata"""
-        with open(self.metadata_file, 'w') as f:
-            json.dump(self.metadata, f, indent=2)
-    
-    def get_file_hash(self, file_content: bytes) -> str:
-        """Generate hash for file content"""
-        return hashlib.md5(file_content).hexdigest()
-    
-    def process_file(self, uploaded_file) -> bool:
-        """Process and index a single file"""
+    def generate_answer(self, query: str, context_chunks: List[Tuple[str, float]]) -> str:
+        """Generate answer using Gemini model"""
+        if not self.model:
+            return "Please configure your Gemini API key first."
+        
+        # Prepare context
+        context = "\n\n".join([f"Chunk {i+1} (Relevance: {score:.3f}):\n{chunk}" 
+                              for i, (chunk, score) in enumerate(context_chunks)])
+        
+        prompt = f"""Based on the following context chunks, please answer the user's question. 
+If the answer cannot be found in the provided context, please say so clearly.
+
+Context:
+{context}
+
+Question: {query}
+
+Answer:"""
+
         try:
-            st.write(f"📄 Starting to process: {uploaded_file.name}")
-            
-            # Read file content
-            file_content = uploaded_file.read()
-            file_hash = self.get_file_hash(file_content)
-            
-            st.write(f"🔍 File hash: {file_hash[:8]}...")
-            
-            # Check if file already exists
-            if file_hash in self.metadata:
-                st.warning(f"File {uploaded_file.name} already exists in the database")
-                return False
-            
-            # Save file temporarily
-            with tempfile.NamedTemporaryFile(delete=False, suffix=Path(uploaded_file.name).suffix) as tmp_file:
-                tmp_file.write(file_content)
-                tmp_path = tmp_file.name
-            
-            st.write(f"💾 Saved temporary file: {tmp_path}")
-            
-            try:
-                # Extract text based on file type
-                file_ext = Path(uploaded_file.name).suffix.lower()
-                st.write(f"🔧 Processing file type: {file_ext}")
-                
-                if file_ext == '.pdf':
-                    raw_chunks = self.doc_processor.extract_text_from_pdf(tmp_path)
-                elif file_ext == '.docx':
-                    raw_chunks = self.doc_processor.extract_text_from_docx(tmp_path)
-                elif file_ext == '.txt':
-                    raw_chunks = self.doc_processor.extract_text_from_txt(tmp_path)
-                elif file_ext == '.csv':
-                    raw_chunks = self.doc_processor.extract_text_from_csv(tmp_path)
-                else:
-                    st.error(f"Unsupported file type: {file_ext}")
-                    return False
-                
-                st.write(f"📝 Extracted {len(raw_chunks)} raw chunks")
-                
-                if not raw_chunks:
-                    st.error("No content extracted from file")
-                    return False
-                
-                # Process chunks
-                processed_chunks = []
-                chunk_id = 0
-                
-                for i, raw_chunk in enumerate(raw_chunks):
-                    st.write(f"🔨 Processing chunk {i+1}/{len(raw_chunks)}")
-                    
-                    # Further chunk the text if it's too long
-                    text_chunks = self.text_chunker.chunk_text(raw_chunk['text'])
-                    st.write(f"  ➡️ Split into {len(text_chunks)} sub-chunks")
-                    
-                    for text_chunk in text_chunks:
-                        if text_chunk.strip():
-                            chunk_metadata = {
-                                'filename': uploaded_file.name,
-                                'file_hash': file_hash,
-                                'chunk_id': chunk_id,
-                                'source_info': raw_chunk
-                            }
-                            
-                            processed_chunks.append({
-                                'text': text_chunk,
-                                'metadata': chunk_metadata,
-                                'id': f"{file_hash}_{chunk_id}"
-                            })
-                            chunk_id += 1
-                
-                if not processed_chunks:
-                    st.error("No text content found in the file")
-                    return False
-                
-                st.write(f"✅ Created {len(processed_chunks)} final chunks")
-                
-                # Generate embeddings
-                st.write("🧠 Generating embeddings...")
-                texts = [chunk['text'] for chunk in processed_chunks]
-                embeddings = self.embedding_model.encode(texts)
-                st.write(f"✅ Generated embeddings: {embeddings.shape}")
-                
-                # Store in vector database
-                st.write("💾 Storing in vector database...")
-                ids = [chunk['id'] for chunk in processed_chunks]
-                metadatas = [chunk['metadata'] for chunk in processed_chunks]
-                
-                self.vector_db.add(
-                    embeddings=embeddings.tolist(),
-                    documents=texts,
-                    metadatas=metadatas,
-                    ids=ids
+            response = self.model.generate_content(
+                prompt,
+                generation_config=genai.types.GenerationConfig(
+                    max_output_tokens=500,
+                    temperature=0.1,
                 )
-                st.write("✅ Stored in vector database")
-                
-                # Update metadata
-                self.metadata[file_hash] = {
-                    'filename': uploaded_file.name,
-                    'chunk_count': len(processed_chunks),
-                    'file_size': len(file_content)
-                }
-                self.save_metadata()
-                st.write("✅ Updated metadata")
-                
-                st.success(f"🎉 Successfully processed {uploaded_file.name} ({len(processed_chunks)} chunks)")
-                return True
-                
-            finally:
-                # Clean up temporary file
-                if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
-                    st.write("🗑️ Cleaned up temporary file")
-                
-        except Exception as e:
-            st.error(f"❌ Error processing file {uploaded_file.name}: {str(e)}")
-            st.exception(e)  # This will show the full traceback
-            return False
-    
-    def delete_file(self, file_hash: str) -> bool:
-        """Delete a file from the vector database"""
-        try:
-            if file_hash not in self.metadata:
-                st.error("File not found in database")
-                return False
-            
-            # Get all chunk IDs for this file
-            results = self.vector_db.get(
-                where={"file_hash": file_hash},
-                include=["metadatas"]
             )
-            
-            if results['ids']:
-                # Delete chunks from vector database
-                self.vector_db.delete(ids=results['ids'])
-                
-                # Remove from metadata
-                filename = self.metadata[file_hash]['filename']
-                del self.metadata[file_hash]
-                self.save_metadata()
-                
-                st.success(f"Successfully deleted {filename}")
-                return True
+            return response.text
+        except Exception as e:
+            return f"Error generating answer: {str(e)}"
+
+class RAGSystem:
+    """Main RAG System class"""
+    
+    def __init__(self):
+        self.chunker = LlamaChunker(config.CHUNK_SIZE, config.CHUNK_OVERLAP)
+        self.embedding_manager = EmbeddingManager(config.EMBEDDING_MODEL)
+        self.llm_manager = LLMManager()
+        self.processed_chunks = []
+        self.is_ready = False
+    
+    def process_documents(self, files) -> bool:
+        """Process uploaded documents"""
+        all_text = ""
+        
+        for file in files:
+            if file.type == "application/pdf":
+                text = DocumentProcessor.read_pdf(file)
+            elif file.type == "text/plain":
+                text = DocumentProcessor.read_txt(file)
             else:
-                st.error("No chunks found for this file")
-                return False
-                
-        except Exception as e:
-            st.error(f"Error deleting file: {str(e)}")
+                st.warning(f"Unsupported file type: {file.type}")
+                continue
+            
+            all_text += f"\n\n--- Document: {file.name} ---\n\n" + text
+        
+        if not all_text.strip():
             return False
+        
+        # Chunk the text
+        with st.spinner("Chunking documents..."):
+            self.processed_chunks = self.chunker.chunk_text(all_text)
+        
+        # Build vector database
+        with st.spinner("Building vector database..."):
+            self.embedding_manager.build_vector_db(self.processed_chunks)
+        
+        self.is_ready = True
+        return True
     
-    def search_and_answer(self, query: str, top_k: int = 5) -> Dict[str, Any]:
-        """Search for relevant chunks and generate answer"""
+    def query(self, question: str) -> Tuple[str, List[Tuple[str, float]]]:
+        """Process query and return answer with relevant chunks"""
+        if not self.is_ready:
+            return "Please upload and process documents first.", []
+        
+        # Get Gemini API key from secrets
         try:
-            # Generate query embedding
-            query_embedding = self.embedding_model.encode([query])
-            
-            # Search vector database
-            results = self.vector_db.query(
-                query_embeddings=query_embedding.tolist(),
-                n_results=top_k
-            )
-            
-            if not results['documents'][0]:
-                return {
-                    'answer': "No relevant information found in the uploaded documents.",
-                    'sources': []
-                }
-            
-            # Prepare context and sources
-            context_chunks = []
-            sources = []
-            
-            for i, (doc, metadata, distance) in enumerate(zip(
-                results['documents'][0],
-                results['metadatas'][0], 
-                results['distances'][0]
-            )):
-                context_chunks.append(doc)
-                
-                # Format source information
-                source_info = metadata['source_info']
-                if source_info['type'] == 'page':
-                    location = f"page {source_info['page']}"
-                elif source_info['type'] == 'paragraph':
-                    location = f"paragraph {source_info['paragraph']}"
-                elif source_info['type'] == 'line':
-                    location = f"line {source_info['line']}"
-                elif source_info['type'] == 'row':
-                    location = f"row {source_info['row']}"
-                else:
-                    location = "unknown location"
-                
-                sources.append({
-                    'filename': metadata['filename'],
-                    'location': location,
-                    'content_preview': doc[:100] + "..." if len(doc) > 100 else doc,
-                    'relevance_score': 1 - distance  # Convert distance to similarity
-                })
-            
-            # Generate answer using the context
-            context = "\n\n".join(context_chunks)
-            answer = self.generate_answer(query, context, sources)
-            
-            return {
-                'answer': answer,
-                'sources': sources
-            }
-            
-        except Exception as e:
-            st.error(f"Error during search: {str(e)}")
-            return {
-                'answer': "An error occurred while searching for information.",
-                'sources': []
-            }
-    
-    def generate_answer(self, query: str, context: str, sources: List[Dict]) -> str:
-        """Generate answer based on context (simple template-based approach)"""
-        # This is a simple template-based approach
-        # In a production system, you would use an LLM API like OpenAI GPT-4
+            api_key = st.secrets["GEMINI_API_KEY"]
+        except KeyError:
+            return "Gemini API key not found in secrets. Please add GEMINI_API_KEY to your Streamlit secrets.", []
         
-        if not context.strip():
-            return "No relevant information found in the uploaded documents."
+        # Initialize LLM
+        if not self.llm_manager.initialize_gemini(api_key):
+            return "Failed to initialize Gemini API. Please check your API key.", []
         
-        # Simple keyword matching and context extraction
-        query_words = set(query.lower().split())
-        try:
-            context_sentences = sent_tokenize(context)
-        except LookupError:
-            # Fallback to simple sentence splitting
-            context_sentences = re.split(r'[.!?]+', context)
-            context_sentences = [s.strip() for s in context_sentences if s.strip()]
+        # Find relevant chunks
+        relevant_chunks = self.embedding_manager.search_similar_chunks(
+            question, config.TOP_K_CHUNKS
+        )
         
-        relevant_sentences = []
-        for sentence in context_sentences:
-            sentence_words = set(sentence.lower().split())
-            if query_words.intersection(sentence_words):
-                relevant_sentences.append(sentence)
+        # Generate answer
+        answer = self.llm_manager.generate_answer(question, relevant_chunks)
         
-        if relevant_sentences:
-            # Create answer with citations
-            answer_parts = []
-            for i, sentence in enumerate(relevant_sentences[:3]):  # Limit to top 3 sentences
-                if i < len(sources):
-                    source = sources[i]
-                    citation = f"[Source: {source['filename']}, {source['location']}]"
-                    answer_parts.append(f"{sentence} {citation}")
-            
-            return " ".join(answer_parts)
-        else:
-            return f"Based on the uploaded documents, I found related information but couldn't generate a specific answer to: '{query}'. Please try rephrasing your question."
-    
-    def get_uploaded_files(self) -> List[Dict[str, Any]]:
-        """Get list of uploaded files"""
-        files = []
-        for file_hash, metadata in self.metadata.items():
-            files.append({
-                'hash': file_hash,
-                'filename': metadata['filename'],
-                'chunks': metadata['chunk_count'],
-                'size': metadata['file_size']
-            })
-        return files
+        return answer, relevant_chunks
 
 def main():
     st.set_page_config(
@@ -729,151 +279,97 @@ def main():
         layout="wide"
     )
     
-    st.title("🔍 Retrieval-Augmented Generation (RAG) System")
-    st.markdown("Upload documents and ask questions with AI-powered answers and citations.")
+    st.title("🔍 RAG System - Document Q&A")
+    st.markdown("Upload documents and ask questions to get AI-powered answers!")
     
-    # Initialize RAG system
+    # Initialize session state
     if 'rag_system' not in st.session_state:
         st.session_state.rag_system = RAGSystem()
     
-    rag = st.session_state.rag_system
-    
-    # Sidebar for file management
+    # Sidebar for configuration
     with st.sidebar:
-        st.header("📁 File Management")
+        st.header("Configuration")
         
-        # File upload
+        # API Key Status
+        try:
+            api_key = st.secrets["GEMINI_API_KEY"]
+            st.success("✅ Gemini API Key loaded from secrets")
+        except KeyError:
+            st.error("❌ Gemini API Key not found in secrets")
+            st.info("Add GEMINI_API_KEY to your Streamlit secrets")
+        
+        st.markdown("---")
+        
+        # System information
+        st.header("System Info")
+        st.info(f"LLM Model: Google Gemini Pro")
+        st.info(f"Chunk Size: {config.CHUNK_SIZE}")
+        st.info(f"Chunk Overlap: {config.CHUNK_OVERLAP}")
+        st.info(f"Top K Chunks: {config.TOP_K_CHUNKS}")
+        st.info(f"Embedding Model: {config.EMBEDDING_MODEL}")
+    
+    # Main interface
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        st.header("📁 Document Upload")
+        
         uploaded_files = st.file_uploader(
-            "Upload Documents",
-            type=['pdf', 'docx', 'txt', 'csv'],
+            "Choose files",
             accept_multiple_files=True,
-            help="Supported formats: PDF, DOCX, TXT, CSV"
+            type=['pdf', 'txt'],
+            help="Upload PDF or TXT files"
         )
         
         if uploaded_files:
-            if st.button("Process Files"):
-                progress_bar = st.progress(0)
-                for i, file in enumerate(uploaded_files):
-                    st.write(f"Processing {file.name}...")
-                    rag.process_file(file)
-                    progress_bar.progress((i + 1) / len(uploaded_files))
-                st.rerun()
-        
-        st.divider()
-        
-        # File list and management
-        st.subheader("Uploaded Files")
-        files = rag.get_uploaded_files()
-        
-        if files:
-            for file in files:
-                with st.container():
-                    col1, col2 = st.columns([3, 1])
-                    
-                    with col1:
-                        st.write(f"📄 **{file['filename']}**")
-                        st.caption(f"Chunks: {file['chunks']} | Size: {file['size']:,} bytes")
-                    
-                    with col2:
-                        if st.button("🗑️", key=f"delete_{file['hash']}", help="Delete file"):
-                            rag.delete_file(file['hash'])
-                            st.rerun()
-                    
-                    st.divider()
-        else:
-            st.info("No files uploaded yet")
-    
-    # Main content area
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        st.header("💬 Ask Questions")
-        
-        # Initialize chat history
-        if 'chat_history' not in st.session_state:
-            st.session_state.chat_history = []
-        
-        # Query input
-        query = st.text_input(
-            "Ask a question about your documents:",
-            placeholder="What is the main topic discussed in the documents?",
-            key="query_input"
-        )
-        
-        col_search, col_clear = st.columns([1, 1])
-        
-        with col_search:
-            search_clicked = st.button("🔍 Search", type="primary", use_container_width=True)
-        
-        with col_clear:
-            if st.button("🗑️ Clear Chat", use_container_width=True):
-                st.session_state.chat_history = []
-                st.rerun()
-        
-        # Process query
-        if search_clicked and query:
-            if not files:
-                st.warning("Please upload some documents first!")
-            else:
-                with st.spinner("Searching and generating answer..."):
-                    result = rag.search_and_answer(query)
-                    
-                    # Add to chat history
-                    st.session_state.chat_history.append({
-                        'query': query,
-                        'answer': result['answer'],
-                        'sources': result['sources']
-                    })
-                
-                # Clear input
-                st.rerun()
-        
-        # Display chat history
-        for i, chat in enumerate(reversed(st.session_state.chat_history)):
-            with st.container():
-                st.markdown(f"**🙋 Question:** {chat['query']}")
-                st.markdown(f"**🤖 Answer:** {chat['answer']}")
-                
-                if chat['sources']:
-                    with st.expander("📚 Sources", expanded=False):
-                        for j, source in enumerate(chat['sources']):
-                            st.markdown(f"**{j+1}. {source['filename']}** ({source['location']})")
-                            st.caption(f"Relevance: {source['relevance_score']:.2f}")
-                            st.text(source['content_preview'])
-                            st.divider()
-                
-                st.divider()
+            st.write(f"Uploaded {len(uploaded_files)} file(s):")
+            for file in uploaded_files:
+                st.write(f"- {file.name}")
+            
+            if st.button("Process Documents", type="primary"):
+                success = st.session_state.rag_system.process_documents(uploaded_files)
+                if success:
+                    st.success(f"Successfully processed {len(st.session_state.rag_system.processed_chunks)} chunks!")
+                else:
+                    st.error("Failed to process documents.")
     
     with col2:
-        st.header("📊 System Stats")
+        st.header("❓ Ask Questions")
         
-        # Database statistics
-        total_files = len(files)
-        total_chunks = sum(file['chunks'] for file in files) if files else 0
-        total_size = sum(file['size'] for file in files) if files else 0
-        
-        st.metric("Total Files", total_files)
-        st.metric("Total Chunks", total_chunks)
-        st.metric("Total Size", f"{total_size:,} bytes")
-        
-        if files:
-            st.subheader("📈 File Distribution")
-            file_data = pd.DataFrame(files)
-            st.bar_chart(file_data.set_index('filename')['chunks'])
-        
-        st.divider()
-        
-        # Help section
-        st.subheader("ℹ️ How to Use")
-        st.markdown("""
-        1. **Upload Files**: Use the sidebar to upload PDF, DOCX, TXT, or CSV files
-        2. **Process**: Click "Process Files" to index them in the vector database
-        3. **Ask Questions**: Type your questions in the main area
-        4. **Get Answers**: Receive AI-generated answers with source citations
-        5. **Manage Files**: Delete files using the 🗑️ button in the sidebar
-        """)
+        if not st.session_state.rag_system.is_ready:
+            st.warning("Please upload and process documents first.")
+        else:
+            question = st.text_input(
+                "Enter your question:",
+                placeholder="What is this document about?"
+            )
+            
+            if st.button("Get Answer", type="primary") and question:
+                try:
+                    # Check if API key is available
+                    api_key = st.secrets["GEMINI_API_KEY"]
+                    
+                    with st.spinner("Generating answer..."):
+                        answer, relevant_chunks = st.session_state.rag_system.query(question)
+                    
+                    # Display results
+                    st.header("🤖 Answer")
+                    st.write(answer)
+                    
+                    st.header("📋 Relevant Chunks")
+                    for i, (chunk, score) in enumerate(relevant_chunks):
+                        with st.expander(f"Chunk {i+1} (Relevance: {score:.3f})"):
+                            st.write(chunk)
+                
+                except KeyError:
+                    st.error("Gemini API key not found in secrets. Please add GEMINI_API_KEY to your Streamlit secrets.")
+    
+    # Footer
+    st.markdown("---")
+    st.markdown(
+        "Built with Streamlit • Uses Sentence Transformers, FAISS, and OpenAI GPT"
+    )
 
 if __name__ == "__main__":
     main()
-        
 
