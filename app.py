@@ -81,12 +81,32 @@ class LlamaChunker:
     def load_model(_self):
         """Load LLaMA tokenizer (cached for efficiency)"""
         try:
-            _self.tokenizer = AutoTokenizer.from_pretrained(_self.model_name)
+            # Get HuggingFace token from secrets if available
+            hf_token = None
+            try:
+                hf_token = st.secrets["HF_API_KEY"]
+                st.success("✅ HuggingFace token loaded from secrets")
+            except KeyError:
+                st.warning("⚠️ HF_API_KEY not found in secrets. Some models may not be accessible.")
+            
+            # Load tokenizer with authentication if token is available
+            if hf_token:
+                _self.tokenizer = AutoTokenizer.from_pretrained(
+                    _self.model_name, 
+                    use_auth_token=hf_token
+                )
+            else:
+                _self.tokenizer = AutoTokenizer.from_pretrained(_self.model_name)
+            
             if _self.tokenizer.pad_token is None:
                 _self.tokenizer.pad_token = _self.tokenizer.eos_token
+            
+            st.success(f"✅ Successfully loaded model: {_self.model_name}")
             return True
+            
         except Exception as e:
-            st.error(f"Error loading LLaMA model: {str(e)}")
+            st.error(f"❌ Error loading LLaMA model '{_self.model_name}': {str(e)}")
+            st.info("💡 Tip: For Meta LLaMA models, ensure you have HF_API_KEY in secrets and model access approved")
             return False
     
     def chunk_text_with_llama(self, text: str) -> List[str]:
@@ -332,7 +352,7 @@ class LLMManager:
         """Initialize Gemini client"""
         try:
             genai.configure(api_key=api_key)
-            self.model = genai.GenerativeModel('gemini-1.5-flash')
+            self.model = genai.GenerativeModel('gemini-pro')
             return True
         except Exception as e:
             st.error(f"Error initializing Gemini: {str(e)}")
@@ -488,13 +508,63 @@ def main():
     with st.sidebar:
         st.header("Configuration")
         
+        # Model Selection
+        st.subheader("LLaMA Model Selection")
+        model_options = {
+            "microsoft/DialoGPT-medium": "DialoGPT Medium (Default)",
+            "microsoft/DialoGPT-large": "DialoGPT Large",
+            "distilbert-base-uncased": "DistilBERT (Lightweight)",
+            "bert-base-uncased": "BERT Base",
+            "facebook/opt-1.3b": "OPT 1.3B",
+            "microsoft/codebert-base": "CodeBERT (For Code)",
+            "meta-llama/Llama-2-7b-chat-hf": "LLaMA 2 7B (Requires Auth)",
+            "custom": "Custom Model"
+        }
+        
+        selected_model = st.selectbox(
+            "Choose LLaMA Model:",
+            options=list(model_options.keys()),
+            format_func=lambda x: model_options[x],
+            index=0
+        )
+        
+        if selected_model == "custom":
+            custom_model = st.text_input(
+                "Enter custom model name:",
+                placeholder="e.g., meta-llama/Llama-2-13b-chat-hf"
+            )
+            if custom_model:
+                selected_model = custom_model
+        
+        # Update config if different
+        if selected_model != config.LLAMA_MODEL:
+            config.LLAMA_MODEL = selected_model
+            # Reset the system to use new model
+            if st.button("Apply Model Change"):
+                st.session_state.rag_system = RAGSystem()
+                st.success(f"Switched to model: {selected_model}")
+                st.rerun()
+        
+        st.markdown("---")
+        
         # API Key Status
+        st.subheader("API Keys Status")
+        
+        # Gemini API Key
         try:
             api_key = st.secrets["GEMINI_API_KEY"]
-            st.success("✅ Gemini API Key loaded from secrets")
+            st.success("✅ Gemini API Key loaded")
         except KeyError:
-            st.error("❌ Gemini API Key not found in secrets")
-            st.info("Add GEMINI_API_KEY to your Streamlit secrets")
+            st.error("❌ Gemini API Key not found")
+            st.info("Add GEMINI_API_KEY to secrets")
+        
+        # HuggingFace API Key
+        try:
+            hf_key = st.secrets["HF_API_KEY"]
+            st.success("✅ HuggingFace Token loaded")
+        except KeyError:
+            st.warning("⚠️ HF_API_KEY not found")
+            st.info("Add HF_API_KEY for LLaMA models")
         
         st.markdown("---")
         
