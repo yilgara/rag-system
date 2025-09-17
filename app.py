@@ -83,22 +83,67 @@ class LlamaChunker:
         """Load spaCy and LLaMA models (cached for efficiency)"""
         success = True
         
-        # Load spaCy model
+        # Load spaCy model with better error handling for Streamlit Cloud
         try:
-            # Try to load English model
+            st.info("🔄 Loading spaCy model...")
+            
+            # Method 1: Try loading directly (if installed via requirements.txt)
             try:
                 _self.nlp = spacy.load("en_core_web_sm")
-                st.success("✅ spaCy English model loaded")
-            except OSError:
-                st.warning("⚠️ spaCy 'en_core_web_sm' not found. Downloading...")
-                # Download the model
-                os.system("python -m spacy download en_core_web_sm")
-                _self.nlp = spacy.load("en_core_web_sm")
-                st.success("✅ spaCy model downloaded and loaded")
+                st.success("✅ spaCy English model loaded successfully!")
+                
+            except OSError as e:
+                st.warning("⚠️ spaCy model not found in expected location")
+                st.info("📋 Trying alternative loading methods...")
+                
+                # Method 2: Try different model names that might be available
+                alternative_models = [
+                    "en_core_web_sm",
+                    "en",
+                    "en_core_web_md",
+                    "en_core_web_lg"
+                ]
+                
+                loaded = False
+                for model_name in alternative_models:
+                    try:
+                        st.info(f"🔍 Trying model: {model_name}")
+                        _self.nlp = spacy.load(model_name)
+                        st.success(f"✅ Loaded alternative model: {model_name}")
+                        loaded = True
+                        break
+                    except:
+                        continue
+                
+                if not loaded:
+                    # Method 3: Try installing and loading
+                    st.info("📦 Attempting to install spaCy model...")
+                    try:
+                        import subprocess
+                        import sys
+                        
+                        # Try to install the model
+                        result = subprocess.run([
+                            sys.executable, "-m", "spacy", "download", "en_core_web_sm", "--user"
+                        ], capture_output=True, text=True, timeout=180)
+                        
+                        if result.returncode == 0:
+                            st.info("✅ Installation completed, trying to load...")
+                            _self.nlp = spacy.load("en_core_web_sm")
+                            st.success("✅ spaCy model installed and loaded!")
+                        else:
+                            st.error(f"❌ Installation failed: {result.stderr}")
+                            raise Exception("Installation failed")
+                            
+                    except Exception as install_error:
+                        st.error(f"❌ Could not install spaCy model: {str(install_error)}")
+                        st.info("💡 Using enhanced fallback chunking method")
+                        _self.nlp = None
+                        
         except Exception as e:
-            st.error(f"❌ Error loading spaCy: {str(e)}")
-            st.info("💡 Install with: python -m spacy download en_core_web_sm")
-            success = False
+            st.error(f"❌ Unexpected error with spaCy: {str(e)}")
+            st.info("💡 Using enhanced fallback chunking method")
+            _self.nlp = None
         
         # Load HuggingFace tokenizer
         try:
@@ -125,11 +170,12 @@ class LlamaChunker:
             st.success(f"✅ Successfully loaded tokenizer: {_self.model_name}")
             
         except Exception as e:
-            st.error(f"❌ Error loading tokenizer '{_self.model_name}': {str(e)}")
-            st.info("💡 Tip: For Meta LLaMA models, ensure you have HF_API_KEY in secrets and model access approved")
-            success = False
+            st.warning(f"⚠️ Could not load tokenizer '{_self.model_name}': {str(e)}")
+            st.info("💡 Using basic tokenization fallback")
+            _self.tokenizer = None
+            # Don't mark as failure since we have fallbacks
         
-        return success
+        return True  # Always return True since we have fallback methods
     
     def chunk_text_intelligently(self, text: str) -> List[Dict]:
         """
@@ -264,48 +310,68 @@ class LlamaChunker:
         }
     
     def _fallback_chunk(self, text: str) -> List[Dict]:
-        """Fallback chunking method when spaCy is not available"""
-        st.warning("⚠️ Using fallback chunking method (spaCy not available)")
+        """Enhanced fallback chunking method when spaCy is not available"""
+        st.info("🔄 Using enhanced regex-based sentence chunking")
         
         chunks = []
-        sentences = re.split(r'[.!?]+', text)
+        
+        # Better sentence splitting using regex
+        # This pattern handles common sentence endings better
+        sentence_pattern = r'(?<=[.!?])\s+(?=[A-Z])'
+        sentences = re.split(sentence_pattern, text)
+        
+        # Clean sentences
+        clean_sentences = []
+        for sent in sentences:
+            sent = sent.strip()
+            if sent and len(sent) > 10:  # Filter very short fragments
+                clean_sentences.append(sent)
+        
+        if not clean_sentences:
+            return [self._create_chunk_dict(text, [text], 0)]
         
         current_chunk = ""
         current_sentences = []
+        para_idx = 0
         
-        for i, sentence in enumerate(sentences):
-            sentence = sentence.strip()
-            if not sentence:
-                continue
+        for i, sentence in enumerate(clean_sentences):
+            # Estimate if this sentence would make chunk too long
+            potential_chunk = current_chunk + " " + sentence if current_chunk else sentence
             
-            if len(current_chunk) + len(sentence) > config.CHUNK_SIZE and current_chunk:
+            if len(potential_chunk) > config.CHUNK_SIZE and current_chunk:
+                # Save current chunk
                 chunks.append(self._create_chunk_dict(
                     current_chunk.strip(), 
                     current_sentences,
-                    i // 10  # Rough paragraph estimation
+                    para_idx
                 ))
                 
-                # Simple overlap
+                # Start new chunk with overlap (last sentence)
                 if current_sentences:
                     current_chunk = current_sentences[-1] + " " + sentence
                     current_sentences = [current_sentences[-1], sentence]
                 else:
                     current_chunk = sentence
                     current_sentences = [sentence]
+                
+                para_idx += 1
             else:
+                # Add to current chunk
                 if current_chunk:
-                    current_chunk += ". " + sentence
+                    current_chunk += " " + sentence
                 else:
                     current_chunk = sentence
                 current_sentences.append(sentence)
         
+        # Add final chunk
         if current_chunk.strip():
             chunks.append(self._create_chunk_dict(
                 current_chunk.strip(), 
                 current_sentences,
-                len(sentences) // 10
+                para_idx
             ))
         
+        st.success(f"✅ Created {len(chunks)} chunks using enhanced fallback method")
         return chunks
     
     def chunk_text_with_llama(self, text: str) -> List[str]:
@@ -767,7 +833,7 @@ def main():
         # System information
         st.header("System Info")
         st.info(f"LLM Model: Google Gemini Pro")
-        st.info(f"Chunking: spaCy + {config.LLAMA_MODEL}")
+        st.info(f"Chunking: spaCy + LLaMA Intelligent")
         st.info(f"Chunk Size: {config.CHUNK_SIZE}")
         st.info(f"Chunk Overlap: {config.CHUNK_OVERLAP}")
         st.info(f"Top K Chunks: {config.TOP_K_CHUNKS}")
