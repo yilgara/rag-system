@@ -23,9 +23,3 @@ huggingface-hub>=0.16.0
 # Utility libraries
 pandas>=2.0.0
 requests>=2.31.0
-
-# For file hashing and persistence
-hashlib
-pickle
-json
-tempfile
