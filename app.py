@@ -7,6 +7,7 @@ import faiss
 import google.generativeai as genai
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
+import spacy
 from typing import List, Tuple, Dict
 import re
 import json
@@ -69,17 +70,37 @@ class DocumentProcessor:
             return "", ""
 
 class LlamaChunker:
-    """Real LLaMA-based text chunker"""
+    """Intelligent text chunker using spaCy for sentence/paragraph boundaries"""
     
     def __init__(self, model_name: str = None):
         self.model_name = model_name or config.LLAMA_MODEL
         self.tokenizer = None
-        self.model = None
-        self.load_model()
+        self.nlp = None
+        self.load_models()
     
     @st.cache_resource
-    def load_model(_self):
-        """Load LLaMA tokenizer (cached for efficiency)"""
+    def load_models(_self):
+        """Load spaCy and LLaMA models (cached for efficiency)"""
+        success = True
+        
+        # Load spaCy model
+        try:
+            # Try to load English model
+            try:
+                _self.nlp = spacy.load("en_core_web_sm")
+                st.success("✅ spaCy English model loaded")
+            except OSError:
+                st.warning("⚠️ spaCy 'en_core_web_sm' not found. Downloading...")
+                # Download the model
+                os.system("python -m spacy download en_core_web_sm")
+                _self.nlp = spacy.load("en_core_web_sm")
+                st.success("✅ spaCy model downloaded and loaded")
+        except Exception as e:
+            st.error(f"❌ Error loading spaCy: {str(e)}")
+            st.info("💡 Install with: python -m spacy download en_core_web_sm")
+            success = False
+        
+        # Load HuggingFace tokenizer
         try:
             # Get HuggingFace token from secrets if available
             hf_token = None
@@ -101,73 +122,204 @@ class LlamaChunker:
             if _self.tokenizer.pad_token is None:
                 _self.tokenizer.pad_token = _self.tokenizer.eos_token
             
-            st.success(f"✅ Successfully loaded model: {_self.model_name}")
-            return True
+            st.success(f"✅ Successfully loaded tokenizer: {_self.model_name}")
             
         except Exception as e:
-            st.error(f"❌ Error loading LLaMA model '{_self.model_name}': {str(e)}")
+            st.error(f"❌ Error loading tokenizer '{_self.model_name}': {str(e)}")
             st.info("💡 Tip: For Meta LLaMA models, ensure you have HF_API_KEY in secrets and model access approved")
-            return False
+            success = False
+        
+        return success
+    
+    def chunk_text_intelligently(self, text: str) -> List[Dict]:
+        """
+        Chunk text using spaCy for intelligent paragraph and sentence boundaries
+        Returns list of chunk dictionaries with metadata
+        """
+        if not self.nlp:
+            return self._fallback_chunk(text)
+        
+        # Process text with spaCy
+        doc = self.nlp(text)
+        
+        # Extract paragraphs (split by double newlines or more)
+        paragraphs = self._extract_paragraphs(text)
+        
+        chunks = []
+        current_chunk = ""
+        current_sentences = []
+        current_tokens = 0
+        
+        for para_idx, paragraph in enumerate(paragraphs):
+            if not paragraph.strip():
+                continue
+                
+            # Process paragraph with spaCy
+            para_doc = self.nlp(paragraph)
+            sentences = list(para_doc.sents)
+            
+            for sent in sentences:
+                sentence_text = sent.text.strip()
+                if not sentence_text:
+                    continue
+                
+                # Estimate token count for this sentence
+                sentence_tokens = self._estimate_tokens(sentence_text)
+                
+                # Check if adding this sentence would exceed chunk size
+                if (current_tokens + sentence_tokens > config.CHUNK_SIZE and 
+                    current_chunk.strip()):
+                    
+                    # Save current chunk
+                    if current_chunk.strip():
+                        chunks.append(self._create_chunk_dict(
+                            current_chunk.strip(), 
+                            current_sentences,
+                            para_idx
+                        ))
+                    
+                    # Start new chunk with overlap consideration
+                    overlap_sentences = self._get_overlap_sentences(
+                        current_sentences, 
+                        config.CHUNK_OVERLAP
+                    )
+                    
+                    current_chunk = " ".join(overlap_sentences) + " " + sentence_text
+                    current_sentences = overlap_sentences + [sentence_text]
+                    current_tokens = self._estimate_tokens(current_chunk)
+                else:
+                    # Add sentence to current chunk
+                    if current_chunk:
+                        current_chunk += " " + sentence_text
+                    else:
+                        current_chunk = sentence_text
+                    
+                    current_sentences.append(sentence_text)
+                    current_tokens += sentence_tokens
+        
+        # Add the last chunk
+        if current_chunk.strip():
+            chunks.append(self._create_chunk_dict(
+                current_chunk.strip(), 
+                current_sentences,
+                len(paragraphs) - 1
+            ))
+        
+        return chunks
+    
+    def _extract_paragraphs(self, text: str) -> List[str]:
+        """Extract paragraphs from text"""
+        # Split by double newlines or more, but preserve some structure
+        paragraphs = re.split(r'\n\s*\n', text)
+        
+        # Clean paragraphs
+        cleaned_paragraphs = []
+        for para in paragraphs:
+            # Remove excessive whitespace but preserve single line breaks
+            cleaned = re.sub(r'\s+', ' ', para.strip())
+            if cleaned:
+                cleaned_paragraphs.append(cleaned)
+        
+        return cleaned_paragraphs
+    
+    def _estimate_tokens(self, text: str) -> int:
+        """Estimate token count using LLaMA tokenizer or fallback"""
+        if self.tokenizer:
+            try:
+                return len(self.tokenizer.encode(text, add_special_tokens=False))
+            except:
+                pass
+        
+        # Fallback: rough estimation (1 token ≈ 4 characters for English)
+        return len(text) // 4
+    
+    def _get_overlap_sentences(self, sentences: List[str], overlap_chars: int) -> List[str]:
+        """Get sentences for overlap based on character count"""
+        if not sentences:
+            return []
+        
+        overlap_sentences = []
+        current_overlap = 0
+        
+        # Start from the end and work backwards
+        for sentence in reversed(sentences):
+            if current_overlap + len(sentence) <= overlap_chars:
+                overlap_sentences.insert(0, sentence)
+                current_overlap += len(sentence)
+            else:
+                break
+        
+        return overlap_sentences
+    
+    def _create_chunk_dict(self, chunk_text: str, sentences: List[str], paragraph_idx: int) -> Dict:
+        """Create a structured chunk dictionary with metadata"""
+        return {
+            'text': chunk_text,
+            'sentences': sentences,
+            'sentence_count': len(sentences),
+            'paragraph_index': paragraph_idx,
+            'char_count': len(chunk_text),
+            'estimated_tokens': self._estimate_tokens(chunk_text),
+            'type': 'paragraph_based'
+        }
+    
+    def _fallback_chunk(self, text: str) -> List[Dict]:
+        """Fallback chunking method when spaCy is not available"""
+        st.warning("⚠️ Using fallback chunking method (spaCy not available)")
+        
+        chunks = []
+        sentences = re.split(r'[.!?]+', text)
+        
+        current_chunk = ""
+        current_sentences = []
+        
+        for i, sentence in enumerate(sentences):
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+            
+            if len(current_chunk) + len(sentence) > config.CHUNK_SIZE and current_chunk:
+                chunks.append(self._create_chunk_dict(
+                    current_chunk.strip(), 
+                    current_sentences,
+                    i // 10  # Rough paragraph estimation
+                ))
+                
+                # Simple overlap
+                if current_sentences:
+                    current_chunk = current_sentences[-1] + " " + sentence
+                    current_sentences = [current_sentences[-1], sentence]
+                else:
+                    current_chunk = sentence
+                    current_sentences = [sentence]
+            else:
+                if current_chunk:
+                    current_chunk += ". " + sentence
+                else:
+                    current_chunk = sentence
+                current_sentences.append(sentence)
+        
+        if current_chunk.strip():
+            chunks.append(self._create_chunk_dict(
+                current_chunk.strip(), 
+                current_sentences,
+                len(sentences) // 10
+            ))
+        
+        return chunks
     
     def chunk_text_with_llama(self, text: str) -> List[str]:
         """
-        Chunk text using LLaMA tokenizer for better semantic understanding
+        Main chunking method - returns list of chunk texts for backward compatibility
         """
-        if not self.tokenizer:
-            # Fallback to simple chunking
-            return self._simple_chunk(text)
-        
-        # Tokenize the entire text
-        tokens = self.tokenizer.encode(text, add_special_tokens=False)
-        
-        chunks = []
-        chunk_size_tokens = config.CHUNK_SIZE // 4  # Approximate tokens per chunk
-        overlap_tokens = config.CHUNK_OVERLAP // 4
-        
-        for i in range(0, len(tokens), chunk_size_tokens - overlap_tokens):
-            chunk_tokens = tokens[i:i + chunk_size_tokens]
-            chunk_text = self.tokenizer.decode(chunk_tokens, skip_special_tokens=True)
-            
-            # Clean up the chunk
-            chunk_text = self._clean_chunk(chunk_text)
-            if chunk_text.strip():
-                chunks.append(chunk_text)
-        
-        return chunks
+        chunk_dicts = self.chunk_text_intelligently(text)
+        return [chunk['text'] for chunk in chunk_dicts]
     
-    def _simple_chunk(self, text: str) -> List[str]:
-        """Fallback simple chunking method"""
-        chunks = []
-        start = 0
-        
-        while start < len(text):
-            end = start + config.CHUNK_SIZE
-            if end < len(text):
-                # Find sentence boundary
-                while end > start and text[end] not in '.!?\n':
-                    end -= 1
-                if end == start:
-                    end = start + config.CHUNK_SIZE
-            
-            chunk = text[start:end].strip()
-            if chunk:
-                chunks.append(chunk)
-            
-            start = end - config.CHUNK_OVERLAP
-            if start <= 0:
-                start = end
-        
-        return chunks
-    
-    def _clean_chunk(self, chunk: str) -> str:
-        """Clean and preprocess chunk text"""
-        # Remove excessive whitespace
-        chunk = re.sub(r'\s+', ' ', chunk)
-        # Remove incomplete sentences at the beginning
-        sentences = chunk.split('.')
-        if len(sentences) > 1 and len(sentences[0]) < 10:
-            chunk = '.'.join(sentences[1:])
-        return chunk.strip()
+    def get_chunk_metadata(self, text: str) -> List[Dict]:
+        """
+        Get detailed chunking information with metadata
+        """
+        return self.chunk_text_intelligently(text)
 
 class FileMetadataManager:
     """Manages file metadata and tracks processed files"""
@@ -204,14 +356,19 @@ class FileMetadataManager:
             return metadata[filename].get('hash') == file_hash
         return False
     
-    def add_file_metadata(self, filename: str, file_hash: str, chunk_count: int):
-        """Add file metadata"""
+    def add_file_metadata(self, filename: str, file_hash: str, chunk_count: int, extra_info: Dict = None):
+        """Add file metadata with optional extra information"""
         metadata = self.load_metadata()
-        metadata[filename] = {
+        file_info = {
             'hash': file_hash,
             'chunk_count': chunk_count,
             'processed_at': datetime.now().isoformat()
         }
+        
+        if extra_info:
+            file_info.update(extra_info)
+        
+        metadata[filename] = file_info
         self.save_metadata(metadata)
     
     def get_processed_files(self) -> List[str]:
@@ -352,7 +509,7 @@ class LLMManager:
         """Initialize Gemini client"""
         try:
             genai.configure(api_key=api_key)
-            self.model = genai.GenerativeModel('gemini-1.5-flash')
+            self.model = genai.GenerativeModel('gemini-pro')
             return True
         except Exception as e:
             st.error(f"Error initializing Gemini: {str(e)}")
@@ -430,15 +587,28 @@ class RAGSystem:
             
             # Process new file
             if text.strip():
-                with st.spinner(f"Processing {file.name} with LLaMA..."):
+                with st.spinner(f"Processing {file.name} with intelligent chunking..."):
                     file_chunks = self.chunker.chunk_text_with_llama(text)
+                    
+                    # Get detailed metadata for display
+                    chunk_metadata = self.chunker.get_chunk_metadata(text)
                 
                 # Add document identifier to chunks
                 prefixed_chunks = [f"[Document: {file.name}]\n{chunk}" for chunk in file_chunks]
                 all_new_chunks.extend(prefixed_chunks)
                 
-                # Update metadata
-                self.metadata_manager.add_file_metadata(file.name, file_hash, len(file_chunks))
+                # Update metadata with chunking info
+                self.metadata_manager.add_file_metadata(
+                    file.name, 
+                    file_hash, 
+                    len(file_chunks),
+                    extra_info={
+                        'chunking_method': 'spacy_intelligent',
+                        'avg_sentences_per_chunk': sum(c['sentence_count'] for c in chunk_metadata) / len(chunk_metadata) if chunk_metadata else 0,
+                        'total_sentences': sum(c['sentence_count'] for c in chunk_metadata),
+                        'paragraphs_processed': len(set(c['paragraph_index'] for c in chunk_metadata))
+                    }
+                )
                 results['new_files'].append(file.name)
                 results['new_chunks'] += len(file_chunks)
         
@@ -575,16 +745,29 @@ def main():
         st.metric("Processed Files", len(stats['processed_files']))
         
         if stats['processed_files']:
-            with st.expander("Processed Files"):
+            with st.expander("Processed Files Details"):
+                metadata = st.session_state.rag_system.metadata_manager.load_metadata()
                 for file in stats['processed_files']:
-                    st.write(f"📄 {file}")
+                    file_info = metadata.get(file, {})
+                    st.write(f"📄 **{file}**")
+                    st.write(f"   • Chunks: {file_info.get('chunk_count', 'N/A')}")
+                    if 'chunking_method' in file_info:
+                        st.write(f"   • Method: {file_info['chunking_method']}")
+                        if 'avg_sentences_per_chunk' in file_info:
+                            st.write(f"   • Avg sentences/chunk: {file_info['avg_sentences_per_chunk']:.1f}")
+                        if 'total_sentences' in file_info:
+                            st.write(f"   • Total sentences: {file_info['total_sentences']}")
+                        if 'paragraphs_processed' in file_info:
+                            st.write(f"   • Paragraphs: {file_info['paragraphs_processed']}")
+                    st.write(f"   • Processed: {file_info.get('processed_at', 'N/A')}")
+                    st.write("---")
         
         st.markdown("---")
         
         # System information
         st.header("System Info")
         st.info(f"LLM Model: Google Gemini Pro")
-        st.info(f"Chunking: Real LLaMA ({config.LLAMA_MODEL})")
+        st.info(f"Chunking: spaCy + LLaMA Intelligent")
         st.info(f"Chunk Size: {config.CHUNK_SIZE}")
         st.info(f"Chunk Overlap: {config.CHUNK_OVERLAP}")
         st.info(f"Top K Chunks: {config.TOP_K_CHUNKS}")
@@ -621,6 +804,19 @@ def main():
                     st.success(f"✅ Processed {len(results['new_files'])} new files with {results['new_chunks']} chunks!")
                     for file in results['new_files']:
                         st.write(f"📄 ✅ {file}")
+                    
+                    # Show chunking details
+                    with st.expander("📊 Chunking Details"):
+                        metadata = st.session_state.rag_system.metadata_manager.load_metadata()
+                        for file in results['new_files']:
+                            file_info = metadata.get(file, {})
+                            if 'chunking_method' in file_info:
+                                st.write(f"**{file}:**")
+                                st.write(f"   • Chunks created: {file_info.get('chunk_count', 'N/A')}")
+                                st.write(f"   • Total sentences: {file_info.get('total_sentences', 'N/A')}")
+                                st.write(f"   • Paragraphs processed: {file_info.get('paragraphs_processed', 'N/A')}")
+                                st.write(f"   • Avg sentences per chunk: {file_info.get('avg_sentences_per_chunk', 0):.1f}")
+                                st.write("---")
                 
                 if results['skipped_files']:
                     st.info(f"⏭️ Skipped {len(results['skipped_files'])} already processed files:")
