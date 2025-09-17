@@ -4,8 +4,8 @@ streamlit>=1.28.0
 # PDF processing
 PyPDF2>=3.0.1
 
-# NumPy - Fixed version for spaCy compatibility
-numpy==1.24.3
+# NumPy - Compatible version
+numpy>=1.21.0,<1.25.0
 
 # Machine Learning and Embeddings
 sentence-transformers>=2.2.2
@@ -22,9 +22,9 @@ torch>=2.0.0
 transformers>=4.21.0
 huggingface-hub>=0.16.0
 
-# NLP Processing - spaCy with compatible versions
-spacy>=3.6.0,<3.8.0
-https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.6.0/en_core_web_sm-3.6.0-py3-none-any.whl
+# NLP Processing - spaCy with model (try this approach)
+spacy[lookups]>=3.6.0,<3.8.0
+en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.6.0/en_core_web_sm-3.6.0-py3-none-any.whl
 
 # Utility libraries
 pandas>=2.0.0
