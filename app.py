@@ -767,7 +767,7 @@ def main():
         # System information
         st.header("System Info")
         st.info(f"LLM Model: Google Gemini Pro")
-        st.info(f"Chunking: spaCy + LLaMA Intelligent")
+        st.info(f"Chunking: spaCy + {config.LLAMA_MODEL}")
         st.info(f"Chunk Size: {config.CHUNK_SIZE}")
         st.info(f"Chunk Overlap: {config.CHUNK_OVERLAP}")
         st.info(f"Top K Chunks: {config.TOP_K_CHUNKS}")
