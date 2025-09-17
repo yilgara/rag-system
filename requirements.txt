@@ -20,8 +20,9 @@ torch>=2.0.0
 transformers>=4.21.0
 huggingface-hub>=0.16.0
 
-# NLP Processing - spaCy
+# NLP Processing - spaCy with English model
 spacy>=3.7.0
+https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
 
 # Utility libraries
 pandas>=2.0.0
