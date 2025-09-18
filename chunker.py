@@ -13,180 +13,139 @@ class LlamaChunker:
         self.tokenizer = None
         self.nlp = None
         self.load_models()
-    
+
+
+    def load_models(self):
+    # Call the cached function and assign results to instance
+        self.nlp, self.tokenizer = self._load_models_cached(self.model_name)
+
     @st.cache_resource
-    def load_models(_self):
-        success = True
-        
-        # Load spaCy model with better error handling for Streamlit Cloud
+    def _load_models_cached(self, model_name):
+        nlp_model = None
+        tokenizer = None
+    
+        # Load spaCy model
         try:
             st.info("🔄 Loading spaCy model...")
-            
-            # Method 1: Try loading directly (if installed via requirements.txt)
             try:
-                _self.nlp = spacy.load("en_core_web_sm")
+                nlp_model = spacy.load("en_core_web_sm")
                 st.success("✅ spaCy English model loaded successfully!")
-                
-                st.success(_self.nlp)
-                
-            except OSError as e:
-                st.warning("⚠️ spaCy model not found in expected location")
-                st.info("📋 Trying alternative loading methods...")
-                
-                # Method 2: Try different model names that might be available
-                alternative_models = [
-                    "en_core_web_sm",
-                    "en",
-                    "en_core_web_md",
-                    "en_core_web_lg"
-                ]
-                
-                loaded = False
-                for model_name in alternative_models:
+            except OSError:
+                st.warning("⚠️ spaCy model not found, trying alternatives...")
+                alternative_models = ["en_core_web_sm", "en", "en_core_web_md", "en_core_web_lg"]
+                for alt_model in alternative_models:
                     try:
-                        st.info(f"🔍 Trying model: {model_name}")
-                        _self.nlp = spacy.load(model_name)
-                        st.success(f"✅ Loaded alternative model: {model_name}")
-                        loaded = True
+                        nlp_model = spacy.load(alt_model)
+                        st.success(f"✅ Loaded alternative model: {alt_model}")
                         break
                     except:
                         continue
-                
-                if not loaded:
-                    # Method 3: Try installing and loading
+                if nlp_model is None:
                     st.info("📦 Attempting to install spaCy model...")
-                    try:
-                        import subprocess
-                        import sys
-                        
-                        # Try to install the model
-                        result = subprocess.run([
-                            sys.executable, "-m", "spacy", "download", "en_core_web_sm", "--user"
-                        ], capture_output=True, text=True, timeout=180)
-                        
-                        if result.returncode == 0:
-                            st.info("✅ Installation completed, trying to load...")
-                            _self.nlp = spacy.load("en_core_web_sm")
-                            st.success("✅ spaCy model installed and loaded!")
-                        else:
-                            st.error(f"❌ Installation failed: {result.stderr}")
-                            raise Exception("Installation failed")
-                            
-                    except Exception as install_error:
-                        st.error(f"❌ Could not install spaCy model: {str(install_error)}")
-                        st.info("💡 Using enhanced fallback chunking method")
-                        _self.nlp = None
-                        
+                    import subprocess, sys
+                    result = subprocess.run(
+                        [sys.executable, "-m", "spacy", "download", "en_core_web_sm", "--user"],
+                        capture_output=True, text=True
+                    )
+                    if result.returncode == 0:
+                        nlp_model = spacy.load("en_core_web_sm")
+                        st.success("✅ spaCy model installed and loaded!")
+                    else:
+                        st.error("❌ Could not install spaCy model")
         except Exception as e:
             st.error(f"❌ Unexpected error with spaCy: {str(e)}")
-            st.info("💡 Using enhanced fallback chunking method")
-            _self.nlp = None
-        
+            nlp_model = None
+    
         # Load HuggingFace tokenizer
         try:
-            # Get HuggingFace token from secrets if available
-            hf_token = None
-            try:
-                hf_token = st.secrets["HF_API_KEY"]
-                st.success("✅ HuggingFace token loaded from secrets")
-            except KeyError:
-                st.warning("⚠️ HF_API_KEY not found in secrets. Some models may not be accessible.")
-            
-            # Load tokenizer with authentication if token is available
+            hf_token = st.secrets.get("HF_API_KEY", None)
             if hf_token:
-                _self.tokenizer = AutoTokenizer.from_pretrained(
-                    _self.model_name, 
-                    use_auth_token=hf_token
-                )
+                tokenizer = AutoTokenizer.from_pretrained(model_name, use_auth_token=hf_token)
             else:
-                _self.tokenizer = AutoTokenizer.from_pretrained(_self.model_name)
-            
-            if _self.tokenizer.pad_token is None:
-                _self.tokenizer.pad_token = _self.tokenizer.eos_token
-            
-            st.success(f"✅ Successfully loaded tokenizer: {_self.model_name}")
-            
+                tokenizer = AutoTokenizer.from_pretrained(model_name)
+            if tokenizer.pad_token is None:
+                tokenizer.pad_token = tokenizer.eos_token
+            st.success(f"✅ Successfully loaded tokenizer: {model_name}")
         except Exception as e:
-            st.warning(f"⚠️ Could not load tokenizer '{_self.model_name}': {str(e)}")
-            st.info("💡 Using basic tokenization fallback")
-            _self.tokenizer = None
-            # Don't mark as failure since we have fallbacks
-        
-        return True  # Always return True since we have fallback methods
+            st.warning(f"⚠️ Could not load tokenizer '{model_name}': {str(e)}")
+            tokenizer = None
     
+        return nlp_model, tokenizer
+    
+        
     def chunk_text_intelligently(self, text):
         if not self.nlp:
             st.write(self.nlp)
             st.write("doing fallback")
             return self._fallback_chunk(text)
-        
-        # Process text with spaCy
+            
+            # Process text with spaCy
         st.write("spacy")
         doc = self.nlp(text)
-        
-        # Extract paragraphs (split by double newlines or more)
+            
+            # Extract paragraphs (split by double newlines or more)
         paragraphs = self._extract_paragraphs(text)
-        
+            
         chunks = []
         current_chunk = ""
         current_sentences = []
         current_tokens = 0
-        
+            
         for para_idx, paragraph in enumerate(paragraphs):
             if not paragraph.strip():
                 continue
-                
-            # Process paragraph with spaCy
+                    
+                # Process paragraph with spaCy
             para_doc = self.nlp(paragraph)
             sentences = list(para_doc.sents)
-            
+                
             for sent in sentences:
                 sentence_text = sent.text.strip()
                 if not sentence_text:
                     continue
-                
-                # Estimate token count for this sentence
+                    
+                    # Estimate token count for this sentence
                 sentence_tokens = self._estimate_tokens(sentence_text)
-                
-                # Check if adding this sentence would exceed chunk size
+                    
+                    # Check if adding this sentence would exceed chunk size
                 if (current_tokens + sentence_tokens > config.CHUNK_SIZE and 
                     current_chunk.strip()):
-                    
-                    # Save current chunk
+                        
+                        # Save current chunk
                     if current_chunk.strip():
                         chunks.append(self._create_chunk_dict(
                             current_chunk.strip(), 
                             current_sentences,
                             para_idx
                         ))
-                    
-                    # Start new chunk with overlap consideration
+                        
+                        # Start new chunk with overlap consideration
                     overlap_sentences = self._get_overlap_sentences(
                         current_sentences, 
                         config.CHUNK_OVERLAP
                     )
-                    
+                        
                     current_chunk = " ".join(overlap_sentences) + " " + sentence_text
                     current_sentences = overlap_sentences + [sentence_text]
                     current_tokens = self._estimate_tokens(current_chunk)
                 else:
-                    # Add sentence to current chunk
+                        # Add sentence to current chunk
                     if current_chunk:
                         current_chunk += " " + sentence_text
                     else:
                         current_chunk = sentence_text
-                    
+                        
                     current_sentences.append(sentence_text)
                     current_tokens += sentence_tokens
-        
-        # Add the last chunk
+            
+            # Add the last chunk
         if current_chunk.strip():
             chunks.append(self._create_chunk_dict(
                 current_chunk.strip(), 
                 current_sentences,
                 len(paragraphs) - 1
             ))
-        
+            
         return chunks
     
     def _extract_paragraphs(self, text):
