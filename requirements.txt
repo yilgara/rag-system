@@ -1,10 +1,10 @@
-# Core Streamlit framework
+# Streamlit framework
 streamlit>=1.28.0
 
 # PDF processing
 PyPDF2>=3.0.1
 
-# NumPy - Compatible version
+# NumPy 
 numpy>=1.21.0,<1.25.0
 
 # Machine Learning and Embeddings
@@ -17,12 +17,12 @@ faiss-cpu>=1.7.4
 # Google Gemini AI
 google-generativeai>=0.3.0
 
-# Real LLaMA/Transformer models
+# LLaMA/Transformer models
 torch>=2.0.0
 transformers>=4.21.0
 huggingface-hub>=0.16.0
 
-# NLP Processing - spaCy with model (try this approach)
+# NLP Processing - spaCy 
 spacy[lookups]>=3.6.0,<3.8.0
 en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.6.0/en_core_web_sm-3.6.0-py3-none-any.whl
 
