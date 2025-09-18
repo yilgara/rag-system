@@ -141,7 +141,7 @@ def main():
     # Footer
     st.markdown("---")
     st.markdown(
-        "Built with Streamlit • Uses LLaMA, Sentence Transformers, FAISS, and Google Gemini"
+        "Built with Streamlit • Uses Sentence Transformers, FAISS, and Google Gemini"
     )
 
 if __name__ == "__main__":
