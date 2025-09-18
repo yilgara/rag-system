@@ -1,17 +1,13 @@
-
+import hashlib
 
 
 class DocumentProcessor:
-
-    
     @staticmethod
     def get_file_hash(file_content: bytes) -> str:
-        """Generate hash for file content to detect duplicates"""
         return hashlib.md5(file_content).hexdigest()
     
     @staticmethod
     def read_pdf(file) -> Tuple[str, str]:
-        """Extract text from PDF file and return text + hash"""
         try:
             file_content = file.read()
             file_hash = DocumentProcessor.get_file_hash(file_content)
@@ -29,7 +25,6 @@ class DocumentProcessor:
     
     @staticmethod
     def read_txt(file) -> Tuple[str, str]:
-        """Extract text from TXT file and return text + hash"""
         try:
             file_content = file.read()
             file_hash = DocumentProcessor.get_file_hash(file_content)
