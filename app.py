@@ -13,7 +13,7 @@ def main():
     )
     
     st.title("RAG System")
-    st.markdown("Upload documents and ask questions with LLaMA chunking and persistent storage!")
+    st.markdown("Upload documents and ask questions with persistent storage!")
     
     # Initialize session state
     if 'rag_system' not in st.session_state:
@@ -22,27 +22,6 @@ def main():
     # Sidebar for configuration and stats
     with st.sidebar:
         
-        
-        # API Key Status
-        st.subheader("API Keys Status")
-        
-        # Gemini API Key
-        try:
-            api_key = st.secrets["GEMINI_API_KEY"]
-            st.success("✅ Gemini API Key loaded")
-        except KeyError:
-            st.error("❌ Gemini API Key not found")
-            st.info("Add GEMINI_API_KEY to secrets")
-        
-        # HuggingFace API Key
-        try:
-            hf_key = st.secrets["HF_API_KEY"]
-            st.success("✅ HuggingFace Token loaded")
-        except KeyError:
-            st.warning("⚠️ HF_API_KEY not found")
-            st.info("Add HF_API_KEY for LLaMA models")
-        
-        st.markdown("---")
         
         # System Statistics
         st.header("Database Statistics")
