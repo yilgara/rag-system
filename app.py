@@ -70,7 +70,8 @@ def main():
             "Choose files",
             accept_multiple_files=True,
             type=['pdf', 'txt'],
-            help="Upload PDF or TXT files. Only new files will be processed!"
+            help="Upload PDF or TXT files. Only new files will be processed!",
+            key="uploaded_files"
         )
         
         if uploaded_files:
