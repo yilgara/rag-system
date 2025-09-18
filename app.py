@@ -54,7 +54,6 @@ def main():
         st.info(f"Chunk Overlap: {config.CHUNK_OVERLAP}")
         st.info(f"Top K Chunks: {config.TOP_K_CHUNKS}")
         st.info(f"Embedding Model: {config.EMBEDDING_MODEL}")
-        st.info(f"Tokenizer: {config.LLAMA_MODEL}")
         
         # Reset button (for development)
         if st.button("🗑️ Reset Database", help="Clear all data and start fresh"):
