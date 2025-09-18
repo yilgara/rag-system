@@ -49,7 +49,7 @@ def main():
         
         # System information
         st.header("System Info")
-        st.info(f"LLM Model: Google Gemini Pro")
+        st.info(f"LLM Model: Google Gemini 1.5 Flash")
         st.info(f"Chunk Size: {config.CHUNK_SIZE}")
         st.info(f"Chunk Overlap: {config.CHUNK_OVERLAP}")
         st.info(f"Top K Chunks: {config.TOP_K_CHUNKS}")
