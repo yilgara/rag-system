@@ -3,7 +3,7 @@ from chunker import LlamaChunker
 from embedding import EmbeddingManager
 from llm import LLMManager
 from file_metadata import FileMetadataManager
-import Streamlit as st
+import streamlit as st
 import os
 from document_processor import DocumentProcessor
 
