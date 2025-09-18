@@ -209,7 +209,7 @@ class LlamaChunker:
         # Fallback: rough estimation (1 token ≈ 4 characters for English)
         return len(text) // 4
     
-    def _get_overlap_sentences(self, sentences: List[str], overlap_chars: int) -> List[str]:
+    def _get_overlap_sentences(self, sentences, overlap_chars):
         """Get sentences for overlap based on character count"""
         if not sentences:
             return []
