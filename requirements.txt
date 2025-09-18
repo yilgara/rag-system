@@ -17,10 +17,6 @@ faiss-cpu>=1.7.4
 # Google Gemini AI
 google-generativeai>=0.3.0
 
-# LLaMA/Transformer models
-torch>=2.0.0
-transformers>=4.21.0
-huggingface-hub>=0.16.0
 
 # NLP Processing - spaCy 
 spacy[lookups]>=3.6.0,<3.8.0
