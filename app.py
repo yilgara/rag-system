@@ -95,8 +95,8 @@ def main():
                 st.session_state.clear_uploader = True
                 st.rerun()
         
-        if "clear_uploader" in st.session_state and st.session_state.clear_uploader:
-            st.session_state.uploaded_files = None  
+        if st.session_state.get("clear_uploader"):
+            st.session_state.uploaded_files = []  
             st.session_state.clear_uploader = False
          
     
