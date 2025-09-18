@@ -6,12 +6,9 @@ from rag_system import RAGSystem
 
 
 
-
-
 def main():
     st.set_page_config(
         page_title="RAG System",
-  
         layout="wide"
     )
     
@@ -99,14 +96,12 @@ def main():
                     file_info = metadata.get(file, {})
                     st.write(f"📄 **{file}**")
                     st.write(f"   • Chunks: {file_info.get('chunk_count', 'N/A')}")
-                    if 'chunking_method' in file_info:
-                        st.write(f"   • Method: {file_info['chunking_method']}")
-                        if 'avg_sentences_per_chunk' in file_info:
-                            st.write(f"   • Avg sentences/chunk: {file_info['avg_sentences_per_chunk']:.1f}")
-                        if 'total_sentences' in file_info:
-                            st.write(f"   • Total sentences: {file_info['total_sentences']}")
-                        if 'paragraphs_processed' in file_info:
-                            st.write(f"   • Paragraphs: {file_info['paragraphs_processed']}")
+                    if 'avg_sentences_per_chunk' in file_info:
+                        st.write(f"   • Avg sentences/chunk: {file_info['avg_sentences_per_chunk']:.1f}")
+                    if 'total_sentences' in file_info:
+                        st.write(f"   • Total sentences: {file_info['total_sentences']}")
+                    if 'paragraphs_processed' in file_info:
+                        st.write(f"   • Paragraphs: {file_info['paragraphs_processed']}")
                     st.write(f"   • Processed: {file_info.get('processed_at', 'N/A')}")
                     st.write("---")
         
@@ -115,11 +110,11 @@ def main():
         # System information
         st.header("System Info")
         st.info(f"LLM Model: Google Gemini Pro")
-        st.info(f"Chunking: spaCy + LLaMA Intelligent")
         st.info(f"Chunk Size: {config.CHUNK_SIZE}")
         st.info(f"Chunk Overlap: {config.CHUNK_OVERLAP}")
         st.info(f"Top K Chunks: {config.TOP_K_CHUNKS}")
         st.info(f"Embedding Model: {config.EMBEDDING_MODEL}")
+        st.info(f"Tokenizer: {config.LLAMA_MODEL}")
         
         # Reset button (for development)
         if st.button("🗑️ Reset Database", help="Clear all data and start fresh"):
