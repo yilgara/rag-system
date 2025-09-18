@@ -116,9 +116,12 @@ class LlamaChunker:
     
     def chunk_text_intelligently(self, text):
         if not self.nlp:
+            st.write(self.nlp)
+            st.write("doing fallback")
             return self._fallback_chunk(text)
         
         # Process text with spaCy
+        st.write("spacy")
         doc = self.nlp(text)
         
         # Extract paragraphs (split by double newlines or more)
