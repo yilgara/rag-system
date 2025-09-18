@@ -92,8 +92,12 @@ def main():
                     for file in results['skipped_files']:
                         st.info(f"Skipped already processed file: 📄 **{file}**")
 
-                st.session_state.uploaded_files = []
+                st.session_state.clear_uploader = True
                 st.rerun()
+        
+        if "clear_uploader" in st.session_state and st.session_state.clear_uploader:
+            st.session_state.uploaded_files = None  
+            st.session_state.clear_uploader = False
          
     
     with col2:
