@@ -1,7 +1,6 @@
 from sentence_transformers import SentenceTransformer
 import os
 import pickle
-import streamlit as st
 import faiss
 import numpy as np
 
@@ -38,11 +37,8 @@ class EmbeddingManager:
                     
             if os.path.exists(self.embeddings_file):
                 self.embeddings = np.load(self.embeddings_file)
-                
-            if self.index and self.chunks:
-                st.success(f"Loaded existing database with {len(self.chunks)} chunks")
+            
         except Exception as e:
-            st.warning(f"Could not load existing data: {str(e)}")
             self.index = None
             self.chunks = []
             self.embeddings = None
@@ -50,8 +46,7 @@ class EmbeddingManager:
 
   
     def create_embeddings(self, chunks):
-        with st.spinner(f"Creating embeddings for {len(chunks)} new chunks..."):
-            embeddings = self.model.encode(chunks, show_progress_bar=True)
+        embeddings = self.model.encode(chunks, show_progress_bar=True)
         return embeddings
 
 
@@ -102,7 +97,7 @@ class EmbeddingManager:
                 np.save(self.embeddings_file, self.embeddings)
                 
         except Exception as e:
-            st.error(f"Error saving to disk: {str(e)}")
+            raise e
 
 
   
