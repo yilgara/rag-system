@@ -63,7 +63,6 @@ class RAGSystem:
                     file_hash, 
                     len(file_chunks),
                     extra_info={
-                        'chunking_method': 'spacy_intelligent',
                         'avg_sentences_per_chunk': sum(c['sentence_count'] for c in chunk_metadata) / len(chunk_metadata) if chunk_metadata else 0,
                         'total_sentences': sum(c['sentence_count'] for c in chunk_metadata),
                         'paragraphs_processed': len(set(c['paragraph_index'] for c in chunk_metadata))
