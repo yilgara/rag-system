@@ -48,7 +48,7 @@ class RAGSystem:
             # Process new file
             if text.strip():
                 with st.spinner(f"Processing {file.name} with chunking..."):
-                    file_chunks = self.chunker.chunk_text_with_llama(text)
+                    file_chunks = self.chunker.chunk_text(text)
                     
                     # Get detailed metadata for display
                     chunk_metadata = self.chunker.get_chunk_metadata(text)
