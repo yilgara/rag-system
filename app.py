@@ -83,12 +83,11 @@ def main():
                 
                 # Show results
                 if results['new_files']:
-                    st.success(f"✅ Processed {len(results['new_files'])} new files with {results['new_chunks']} chunks!")
                     for file in results['new_files']:
-                        st.write(f"📄 ✅ {file}")
+                        st.write(f"Processed new file: {file}")
                     
                     # Show chunking details
-                    with st.expander("📊 Chunking Details"):
+                    with st.expander("Chunking Details"):
                         metadata = st.session_state.rag_system.metadata_manager.load_metadata()
                         for file in results['new_files']:
                             file_info = metadata.get(file, {})
@@ -101,11 +100,9 @@ def main():
                                 st.write("---")
                 
                 if results['skipped_files']:
-                    st.info(f"⏭️ Skipped {len(results['skipped_files'])} already processed files:")
                     for file in results['skipped_files']:
-                        st.write(f"📄 ⏭️ {file}")
-                
-                st.info(f"Total chunks in database: {results['total_chunks']}")
+                        st.info(f"Skipped already processed file: {file}")
+         
     
     with col2:
         st.header("❓ Ask Questions")
