@@ -71,7 +71,6 @@ def main():
             accept_multiple_files=True,
             type=['pdf', 'txt'],
             help="Upload PDF or TXT files. Only new files will be processed!",
-            key="uploaded_files"
         )
         
         if uploaded_files:
@@ -92,14 +91,8 @@ def main():
                     for file in results['skipped_files']:
                         st.info(f"Skipped already processed file: 📄 **{file}**")
 
-                st.session_state.clear_uploader = True
                 st.rerun()
         
-        if st.session_state.get("clear_uploader"):
-            st.session_state.uploaded_files = []  
-            st.session_state.clear_uploader = False
-         
-    
     with col2:
         st.header("❓ Ask Questions")
         
