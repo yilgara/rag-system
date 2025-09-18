@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 @dataclass
 class Config:
     CHUNK_SIZE = 1000
