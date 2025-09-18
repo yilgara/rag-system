@@ -84,24 +84,14 @@ def main():
                 # Show results
                 if results['new_files']:
                     for file in results['new_files']:
-                        st.write(f"Processed new file: {file}")
+                        st.success(f"Processed new file: 📄 **{file}**")
                     
-                    # Show chunking details
-                    with st.expander("Chunking Details"):
-                        metadata = st.session_state.rag_system.metadata_manager.load_metadata()
-                        for file in results['new_files']:
-                            file_info = metadata.get(file, {})
-                            if 'chunking_method' in file_info:
-                                st.write(f"**{file}:**")
-                                st.write(f"   • Chunks created: {file_info.get('chunk_count', 'N/A')}")
-                                st.write(f"   • Total sentences: {file_info.get('total_sentences', 'N/A')}")
-                                st.write(f"   • Paragraphs processed: {file_info.get('paragraphs_processed', 'N/A')}")
-                                st.write(f"   • Avg sentences per chunk: {file_info.get('avg_sentences_per_chunk', 0):.1f}")
-                                st.write("---")
                 
                 if results['skipped_files']:
                     for file in results['skipped_files']:
-                        st.info(f"Skipped already processed file: {file}")
+                        st.info(f"Skipped already processed file: 📄 **{file}**")
+
+                st.rerun()
          
     
     with col2:
