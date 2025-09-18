@@ -21,46 +21,7 @@ def main():
     
     # Sidebar for configuration and stats
     with st.sidebar:
-        st.header("Configuration")
         
-        # Model Selection
-        st.subheader("LLaMA Model Selection")
-        model_options = {
-            "microsoft/DialoGPT-medium": "DialoGPT Medium (Default)",
-            "microsoft/DialoGPT-large": "DialoGPT Large",
-            "distilbert-base-uncased": "DistilBERT (Lightweight)",
-            "bert-base-uncased": "BERT Base",
-            "facebook/opt-1.3b": "OPT 1.3B",
-            "microsoft/codebert-base": "CodeBERT (For Code)",
-            "meta-llama/Llama-2-7b-chat-hf": "LLaMA 2 7B (Requires Auth)",
-            "custom": "Custom Model"
-        }
-        
-        selected_model = st.selectbox(
-            "Choose LLaMA Model:",
-            options=list(model_options.keys()),
-            format_func=lambda x: model_options[x],
-            index=0
-        )
-        
-        if selected_model == "custom":
-            custom_model = st.text_input(
-                "Enter custom model name:",
-                placeholder="e.g., meta-llama/Llama-2-13b-chat-hf"
-            )
-            if custom_model:
-                selected_model = custom_model
-        
-        # Update config if different
-        if selected_model != config.LLAMA_MODEL:
-            config.LLAMA_MODEL = selected_model
-            # Reset the system to use new model
-            if st.button("Apply Model Change"):
-                st.session_state.rag_system = RAGSystem()
-                st.success(f"Switched to model: {selected_model}")
-                st.rerun()
-        
-        st.markdown("---")
         
         # API Key Status
         st.subheader("API Keys Status")
