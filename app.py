@@ -1,21 +1,5 @@
 import streamlit as st
 
-import io
-import numpy as np
-
-
-from transformers import AutoTokenizer, AutoModelForCausalLM
-import torch
-import spacy
-
-import re
-import json
-import os
-import pickle
-import hashlib
-
-from datetime import datetime
-import tempfile
 
 from config import config
 from rag_system import RAGSystem
