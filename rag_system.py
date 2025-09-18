@@ -11,7 +11,7 @@ from document_processor import DocumentProcessor
 class RAGSystem:
     def __init__(self, db_path = None):
         self.db_path = db_path or config.DB_PATH
-        self.chunker = LlamaChunker()
+        self.chunker = Chunker()
         self.embedding_manager = EmbeddingManager(config.EMBEDDING_MODEL, self.db_path)
         self.llm_manager = LLMManager()
         self.metadata_manager = FileMetadataManager(self.db_path)
