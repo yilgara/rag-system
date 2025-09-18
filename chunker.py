@@ -20,7 +20,7 @@ class LlamaChunker:
         self.nlp, self.tokenizer = self._load_models_cached(self.model_name)
 
     @st.cache_resource
-    def _load_models_cached(self, model_name):
+    def _load_models_cached(_self, model_name):
         nlp_model = None
         tokenizer = None
     
