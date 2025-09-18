@@ -1,6 +1,5 @@
 import streamlit as st
-
-
+import time
 from config import config
 from rag_system import RAGSystem
 
@@ -91,6 +90,7 @@ def main():
                     for file in results['skipped_files']:
                         st.info(f"Skipped already processed file: 📄 **{file}**")
 
+                time.sleep(3)
                 st.rerun()
         
     with col2:
