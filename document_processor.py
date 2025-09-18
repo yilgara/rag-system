@@ -1,13 +1,14 @@
 import hashlib
+import PyPDF2
 
 
 class DocumentProcessor:
     @staticmethod
-    def get_file_hash(file_content: bytes) -> str:
+    def get_file_hash(file_content: bytes):
         return hashlib.md5(file_content).hexdigest()
     
     @staticmethod
-    def read_pdf(file) -> Tuple[str, str]:
+    def read_pdf(file):
         try:
             file_content = file.read()
             file_hash = DocumentProcessor.get_file_hash(file_content)
@@ -24,7 +25,7 @@ class DocumentProcessor:
             return "", ""
     
     @staticmethod
-    def read_txt(file) -> Tuple[str, str]:
+    def read_txt(file):
         try:
             file_content = file.read()
             file_hash = DocumentProcessor.get_file_hash(file_content)
