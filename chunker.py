@@ -1,48 +1,33 @@
 import streamlit as st
 from config import config
 import spacy
-from transformers import AutoTokenizer, AutoModelForCausalLM
 import re
 
 
 
-class LlamaChunker:
+class Chunker:
     
-    def __init__(self, model_name = None):
-        self.model_name = model_name or config.LLAMA_MODEL
-        self.tokenizer = None
+    def __init__(self):
+        
         self.nlp = None
         self.load_models()
 
 
     def load_models(self):
-        self.nlp, self.tokenizer = self._load_models_cached(self.model_name)
+        self.nlp = self._load_models_cached()
 
     
     @st.cache_resource
-    def _load_models_cached(_self, model_name):
+    def _load_models_cached(_self):
         nlp_model = None
-        tokenizer = None
     
         # Load spaCy model
         try:
             nlp_model = spacy.load("en_core_web_sm")
         except Exception as e:
-            nlp_model = None
+            pass
     
-        # Load HuggingFace tokenizer
-        try:
-            hf_token = st.secrets.get("HF_API_KEY", None)
-            if hf_token:
-                tokenizer = AutoTokenizer.from_pretrained(model_name, use_auth_token=hf_token)
-            else:
-                tokenizer = AutoTokenizer.from_pretrained(model_name)
-            if tokenizer.pad_token is None:
-                tokenizer.pad_token = tokenizer.eos_token
-        except Exception as e:
-            tokenizer = None
-    
-        return nlp_model, tokenizer
+        return nlp_model
     
         
     def chunk_text_intelligently(self, text):
@@ -137,14 +122,7 @@ class LlamaChunker:
 
     
     def _estimate_tokens(self, text):
-
-        if self.tokenizer:
-            try:
-                return len(self.tokenizer.encode(text, add_special_tokens=False))
-            except:
-                pass
-        
-        # Fallback: rough estimation (1 token ≈ 4 characters for English)
+        #rough estimation (1 token ≈ 4 characters for English)
         return len(text) // 4
 
 
