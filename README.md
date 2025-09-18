@@ -2,6 +2,8 @@
 
 A Retrieval-Augmented Generation (RAG) system built with Streamlit that allows you to upload documents and ask questions about their content using Google Gemini AI.
 
+---
+
 ## Features
 
 - **Document Upload & Processing**: Support for PDF and TXT files with automatic deduplication
@@ -11,6 +13,8 @@ A Retrieval-Augmented Generation (RAG) system built with Streamlit that allows y
 - **Persistent Storage**: Maintains processed documents and embeddings across sessions
 - **Real-time Statistics**: Track processed files, chunks, and system performance
 - **Duplicate Detection**: Automatically skips already processed files using content hashing
+
+---
 
 ## Architecture
 
@@ -23,11 +27,15 @@ The system consists of several key components:
 - **FileMetadataManager**: Tracks processed files and prevents duplicates
 - **DocumentProcessor**: Handles PDF and text file reading with content hashing
 
+---
+
 ## Prerequisites
 
 - Python 3.8+
 - Google Gemini API key
 - Streamlit Cloud account (for deployment) or local environment
+
+---
 
 ## Installation
 
@@ -52,6 +60,8 @@ The system consists of several key components:
    
    **For Streamlit Cloud deployment:**
    - Add `GEMINI_API_KEY` to your Streamlit Cloud secrets in the app settings
+
+---
 
 ## Usage
 
@@ -84,6 +94,8 @@ The system consists of several key components:
    - View processed file details and metadata
    - Monitor chunk counts and system performance
 
+---
+
 ## Configuration
 
 The system can be configured through `config.py`:
@@ -96,6 +108,7 @@ TOP_K_CHUNKS = 5           # Number of chunks to retrieve
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 DB_PATH = "./vector_db"    # Path to store the database
 ```
+---
 
 ## File Structure
 
@@ -112,8 +125,7 @@ rag-system/
 ├── requirements.txt      # Python dependencies
 └── README.md             # This file
 ```
-
-
+---
 
 **Deployed Application:**  
 You can access the live system at: [https://rag-system-yroucfntmeexvd9cwinsob.streamlit.app](https://rag-system-yroucfntmeexvd9cwinsob.streamlit.app)
