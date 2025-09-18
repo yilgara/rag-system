@@ -7,7 +7,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 
 class LlamaChunker:
     
-    def __init__(self, model_name: str = None):
+    def __init__(self, model_name = None):
         self.model_name = model_name or config.LLAMA_MODEL
         self.tokenizer = None
         self.nlp = None
@@ -227,8 +227,7 @@ class LlamaChunker:
         
         return overlap_sentences
     
-    def _create_chunk_dict(self, chunk_text: str, sentences: List[str], paragraph_idx: int) -> Dict:
-        """Create a structured chunk dictionary with metadata"""
+    def _create_chunk_dict(self, chunk_text, sentences, paragraph_idx):
         return {
             'text': chunk_text,
             'sentences': sentences,
@@ -239,8 +238,7 @@ class LlamaChunker:
             'type': 'paragraph_based'
         }
     
-    def _fallback_chunk(self, text: str) -> List[Dict]:
-        """Enhanced fallback chunking method when spaCy is not available"""
+    def _fallback_chunk(self, text):
         st.info("🔄 Using enhanced regex-based sentence chunking")
         
         chunks = []
