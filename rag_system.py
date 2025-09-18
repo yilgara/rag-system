@@ -48,10 +48,9 @@ class RAGSystem:
             # Process new file
             if text.strip():
                 with st.spinner(f"Processing {file.name} with chunking..."):
-                    file_chunks = self.chunker.chunk_text(text)
+                    chunk_metadata = self.chunker.chunk_text(text)
                     
-                    # Get detailed metadata for display
-                    chunk_metadata = self.chunker.get_chunk_metadata(text)
+                    file_chunks = [chunk["text"] for chunk in chunk_metadata]
                 
                 # Add document identifier to chunks
                 prefixed_chunks = [f"[Document: {file.name}]\n{chunk}" for chunk in file_chunks]
