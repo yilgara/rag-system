@@ -10,13 +10,13 @@ from rag_system import RAGSystem
 
 def main():
     st.set_page_config(
-        page_title="Advanced RAG System",
-        page_icon="🔍",
+        page_title="RAG System",
+  
         layout="wide"
     )
     
-    st.title("🔍 Advanced RAG System - Incremental Document Processing")
-    st.markdown("Upload documents and ask questions with real LLaMA chunking and persistent storage!")
+    st.title("RAG System")
+    st.markdown("Upload documents and ask questions with LLaMA chunking and persistent storage!")
     
     # Initialize session state
     if 'rag_system' not in st.session_state:
