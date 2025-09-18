@@ -1,5 +1,5 @@
 from config import config
-from chunker import LlamaChunker
+from chunker import Chunker
 from embedding import EmbeddingManager
 from llm import LLMManager
 from file_metadata import FileMetadataManager
