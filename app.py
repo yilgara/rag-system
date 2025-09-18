@@ -92,7 +92,7 @@ def main():
                         st.info(f"Skipped already processed file: 📄 **{file}**")
 
                 st.session_state.uploaded_files = []
-                st.experimental_rerun()
+                st.rerun()
          
     
     with col2:
