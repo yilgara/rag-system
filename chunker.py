@@ -8,7 +8,6 @@ import re
 class Chunker:
     
     def __init__(self):
-        
         self.nlp = None
         self.load_models()
 
@@ -30,7 +29,7 @@ class Chunker:
         return nlp_model
     
         
-    def chunk_text_intelligently(self, text):
+    def chunk_text(self, text):
         if not self.nlp:
             return None
             
@@ -157,10 +156,4 @@ class Chunker:
             'type': 'paragraph_based'
         }
     
-    
-    def chunk_text_with_llama(self, text):
-        chunk_dicts = self.chunk_text_intelligently(text)
-        return [chunk['text'] for chunk in chunk_dicts]
-    
-    def get_chunk_metadata(self, text):
-        return self.chunk_text_intelligently(text)
+   
