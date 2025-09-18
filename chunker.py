@@ -26,7 +26,7 @@ class LlamaChunker:
             try:
                 _self.nlp = spacy.load("en_core_web_sm")
                 st.success("✅ spaCy English model loaded successfully!")
-                st.success(self.nlp)
+                
                 st.success(_self.nlp)
                 
             except OSError as e:
