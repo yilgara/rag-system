@@ -18,7 +18,7 @@ from datetime import datetime
 import tempfile
 
 from config import config
-from rag_system import RagSystem
+from rag_system import RAGSystem
 
 
 
